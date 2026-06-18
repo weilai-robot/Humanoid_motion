@@ -1,0 +1,9 @@
+cmake-build-*
+.idea
+build*/
+install
+*~
+/doc/latex
+/doc/html
+tags
+

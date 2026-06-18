@@ -1,0 +1,44 @@
+freq: 20   # 数据发布频率，单位：Hz
+
+float_pubs:
+  - topic_name: /idle_mode
+    buttons: [7]
+  - topic_name: /zero_mode
+    buttons: [1]
+  - topic_name: /stand_mode
+    buttons: [0]
+  - topic_name: /walk_mode
+    buttons: [2]
+  - topic_name: /walk_mode2
+    buttons: [3]
+  - topic_name: /keep_mode
+    buttons: [6]
+  - topic_name: /plan_mode
+    buttons: [5]
+
+# Twist twist
+#         Vector3  linear
+#                 float64 x
+#                 float64 y
+#                 float64 z
+#         Vector3  angular
+#                 float64 x
+#                 float64 y
+#                 float64 z
+twist_pubs:
+  - topic_name: /cmd_vel
+    buttons: [4]
+    axis:
+      linear-x: 1
+      linear-y: 0
+      angular-z: 3
+    # twist的线速度和角速度限制
+    velocity_limit_lb: [-0.5, -0.3, -0.5]
+    velocity_limit_ub: [0.5, 0.3, 0.5]
+    # 固定速度（可选）：设置后忽略摇杆轴，使用以下固定值行走
+    # 单位：linear m/s，angular rad/s；删除或注释此段恢复摇杆控制
+    # ⚠️ 使用 Nav2 导航时必须注释掉 constant_velocity，否则手柄会持续抢占 /cmd_vel_limiter
+    # constant_velocity:
+    #   linear-x: 0.6
+    #   linear-y: 0.0
+    #   angular-z: 0.0

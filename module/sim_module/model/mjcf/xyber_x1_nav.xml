@@ -1,0 +1,6 @@
+<mujoco model="zhiyuan nav scene">
+
+    <include file="robot/xyber_x1/xyber_x1_serial.xml" />
+    <include file="environment/lab_env.xml" />
+
+</mujoco>

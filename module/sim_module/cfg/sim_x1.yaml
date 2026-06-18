@@ -1,0 +1,7 @@
+model_file: cfg/sim_module/model/mjcf/xyber_x1_flat.xml
+render_frequecy: 50      # 数据发布频率
+
+sub_reset_sim_topic: /reset_sim
+sub_joint_cmd_topic: /joint_cmd
+pub_imu_data_topic: /imu/data
+pub_joint_state_topic: /joint_states

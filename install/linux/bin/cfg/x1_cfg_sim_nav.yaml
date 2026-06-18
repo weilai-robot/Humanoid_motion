@@ -1,0 +1,68 @@
+aimrt:
+  plugin:
+    plugins:
+      - name: ros2_plugin
+        path: ./libaimrt_ros2_plugin.so
+        options:
+          node_name: x1_rl_ctrl_node
+          executor_type: MultiThreaded
+          executor_thread_num: 4
+  log:
+    core_lvl: INFO
+    backends:
+      - type: console
+      - type: rotate_file
+        options:
+          path: ./log
+          filename: x1_rl_ctrl_nav.log
+          max_file_size_m: 4
+          max_file_num: 10
+  executor:
+    executors:
+      - name: rl_control_pub_thread
+        type: simple_thread
+      - name: rl_log_flush_thread
+        type: simple_thread
+      - name: joy_stick_pub_thread
+        type: simple_thread
+      - name: sim_render_thread
+        type: simple_thread
+  channel:
+    backends:
+      - type: local
+      - type: ros2
+    pub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [local, ros2]
+    sub_topics_options:
+      - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|cmd_vel_limiter)"
+        enable_backends: [local, ros2]
+      - topic_name: "(.*)"
+        enable_backends: [local]
+  rpc:
+    backends:
+      - type: local
+      - type: ros2
+    clients_options:
+      - func_name: "(.*)"
+        enable_backends: [local]
+    servers_options:
+      - func_name: "(.*)"
+        enable_backends: [local, ros2]
+  module:
+    pkgs:
+      - path: ./libpkg1.so
+        enable_modules:
+          - JoyStickModule
+          - ControlModule
+          - SimModule
+    modules:
+      - name: JoyStickModule
+        log_lvl: INFO
+        cfg_file_path: ./cfg/joy_stick_module/joy_x1.yaml
+      - name: ControlModule
+        log_lvl: INFO
+        cfg_file_path: ./cfg/control_module/rl_x1_sim.yaml
+      - name: SimModule
+        log_lvl: INFO
+        cfg_file_path: ./cfg/sim_module/sim_x1_nav.yaml

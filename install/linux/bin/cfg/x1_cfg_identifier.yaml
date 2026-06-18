@@ -1,0 +1,58 @@
+aimrt:
+  plugin:
+    plugins:
+      - name: ros2_plugin
+        path: ./libaimrt_ros2_plugin.so
+        options:
+          node_name: x1_identifier_node
+          executor_type: MultiThreaded
+          executor_thread_num: 2
+  log:
+    core_lvl: INFO
+    backends:
+      - type: console
+      - type: rotate_file
+        options:
+          path: ./log
+          filename: x1_identifier.log
+          max_file_size_m: 4
+          max_file_num: 10
+  executor:
+    executors:
+      - name: rl_control_pub_thread
+        type: simple_thread
+      - name: joy_stick_pub_thread
+        type: simple_thread
+  channel:
+    backends:
+      - type: local
+      - type: ros2
+    pub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [local, ros2]
+    sub_topics_options:
+      - topic_name: "(.*)"
+        enable_backends: [local]
+  rpc:
+    backends:
+      - type: local
+      - type: ros2
+    clients_options:
+      - func_name: "(.*)"
+        enable_backends: [local]
+    servers_options:
+      - func_name: "(.*)"
+        enable_backends: [local, ros2]
+  module:
+    pkgs:
+      - path: ./libpkg1.so
+        enable_modules:
+          - DcuDriverModule
+          - AnkleIdentifierModule
+    modules:
+      - name: DcuDriverModule
+        log_lvl: DEBUG
+        cfg_file_path: ./cfg/dcu_driver_module/dcu_x1.yaml
+      - name: AnkleIdentifierModule
+        log_lvl: INFO
+        cfg_file_path: ./cfg/ankle_identifier_module/ankle_identifier.yaml

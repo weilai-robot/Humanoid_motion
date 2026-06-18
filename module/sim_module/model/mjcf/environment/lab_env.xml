@@ -1,0 +1,336 @@
+<mujoco model="lab_env">
+  <!--
+    ============================================================
+    200平实验室仿真环境  20m(X) × 10m(Y)  房间高 2.8m
+    机器人宽约 0.45m
+    通道A (可通过): X=2 隔断, 中心 Y=-3.0, 宽 0.80m
+    通道B (不可通过): X=2 隔断, 中心 Y=+3.2, 宽 0.35m
+    ============================================================
+    坐标系: 房间中心 (0,0,0)
+      X: -10(西墙) ~ +10(东墙)  隔断墙位于 X=2
+      Y:  -5(南墙) ~ +5(北墙)
+      Z:   0(地面) ~ 2.8(天花板)
+    机器人初始生成于原点 (0,0)，位于西区开阔地带
+    ============================================================
+  -->
+
+  <statistic center="0 0 1.2" extent="14"/>
+
+  <visual>
+    <headlight diffuse="0.7 0.7 0.7" ambient="0.35 0.35 0.35" specular="0.1 0.1 0.1"/>
+    <rgba haze="0.08 0.12 0.18 1"/>
+    <global azimuth="130" elevation="-22"/>
+  </visual>
+
+  <asset>
+    <!-- 天空盒 -->
+    <texture name="skybox" type="skybox" builtin="gradient"
+             rgb1="0.25 0.35 0.45" rgb2="0.03 0.03 0.08"
+             width="800" height="800"/>
+    <!-- 地面纹理：灰白方格（仿瓷砖） -->
+    <texture type="2d" name="floor_tex" builtin="checker" mark="edge"
+             rgb1="0.80 0.80 0.78" rgb2="0.65 0.65 0.63"
+             markrgb="0.92 0.92 0.92" width="512" height="512"/>
+    <!-- 墙面纹理：浅米色 -->
+    <texture type="2d" name="wall_tex" builtin="flat"
+             rgb1="0.88 0.84 0.79" width="64" height="64"/>
+    <!-- 木色桌面纹理 -->
+    <texture type="2d" name="wood_tex" builtin="flat"
+             rgb1="0.60 0.42 0.22" width="64" height="64"/>
+
+    <material name="floor"  texture="floor_tex" texuniform="true" texrepeat="10 5" reflectance="0.18"/>
+    <material name="wall"   texture="wall_tex"  reflectance="0.06"/>
+    <material name="wood"   texture="wood_tex"  reflectance="0.08"/>
+    <!-- 金属台面 -->
+    <material name="metal"  rgba="0.72 0.72 0.76 1" reflectance="0.45"/>
+    <!-- 玻璃：半透明蓝色，高反射 -->
+    <material name="glass"  rgba="0.55 0.82 0.95 0.22" reflectance="0.65"/>
+    <!-- 椅子：深蓝灰布面 -->
+    <material name="chair"  rgba="0.22 0.30 0.50 1"   reflectance="0.04"/>
+    <!-- 设备/机柜：深灰 -->
+    <material name="equip"  rgba="0.28 0.28 0.30 1"   reflectance="0.25"/>
+    <!-- 纸箱：浅棕 -->
+    <material name="carton" rgba="0.68 0.52 0.32 1"   reflectance="0.04"/>
+    <!-- 通道标识柱：黄黑警示 -->
+    <material name="warning" rgba="0.95 0.85 0.10 1"  reflectance="0.10"/>
+  </asset>
+
+  <worldbody>
+
+    <!-- ================================================================
+         照明  (顶灯 + 辅助灯)
+    ================================================================ -->
+    <light name="lamp_w1" pos="-7.5  0 5.5" dir="0 0 -1"
+           diffuse="0.75 0.75 0.75" specular="0.2 0.2 0.2"
+           directional="false" cutoff="55"/>
+    <light name="lamp_c"  pos=" 0.0  0 5.5" dir="0 0 -1"
+           diffuse="0.75 0.75 0.75" specular="0.2 0.2 0.2"
+           directional="false" cutoff="55"/>
+    <light name="lamp_e1" pos=" 5.5  2 5.5" dir="0 0 -1"
+           diffuse="0.75 0.75 0.75" specular="0.2 0.2 0.2"
+           directional="false" cutoff="55"/>
+    <light name="lamp_e2" pos=" 5.5 -2 5.5" dir="0 0 -1"
+           diffuse="0.70 0.70 0.70" specular="0.15 0.15 0.15"
+           directional="false" cutoff="50"/>
+    <!-- 环境补光 -->
+    <light name="fill" pos="0 0 8" dir="0 0 -1"
+           diffuse="0.25 0.25 0.25" directional="true"/>
+
+    <!-- ================================================================
+         地面  (20m × 10m 无限平面)
+    ================================================================ -->
+    <geom name="floor" type="plane" size="10 5 0.1"
+          material="floor" conaffinity="7" condim="3" friction="1"/>
+
+    <!-- ================================================================
+         外墙  壁厚 0.2m, 高 2.8m (half_z=1.4)
+    ================================================================ -->
+    <!-- 西墙 x=-10 -->
+    <geom name="wall_west"  type="box" size="0.1 5.1 1.4"
+          pos="-10 0 1.4"  material="wall" conaffinity="7"/>
+    <!-- 东墙 x=+10 -->
+    <geom name="wall_east"  type="box" size="0.1 5.1 1.4"
+          pos=" 10 0 1.4"  material="wall" conaffinity="7"/>
+    <!-- 南墙 y=-5 -->
+    <geom name="wall_south" type="box" size="10.1 0.1 1.4"
+          pos="0 -5 1.4"   material="wall" conaffinity="7"/>
+    <!-- 北墙 y=+5 -->
+    <geom name="wall_north" type="box" size="10.1 0.1 1.4"
+          pos="0  5 1.4"   material="wall" conaffinity="7"/>
+
+    <!-- 天花板 (conaffinity=0 不阻挡传感器外的碰撞，仅供LiDAR Z轴参考) -->
+    <geom name="ceiling" type="box" size="10.1 5.1 0.05"
+          pos="0 0 2.85" material="wall" conaffinity="0" rgba="0.8 0.8 0.9 0.9"/>
+
+    <!-- ================================================================
+         中央隔断墙  (沿 X=2, 全 Y 向, 高 2.6m)
+         X=2 可保证机器人在原点生成时不与墙体碰撞
+         通道A (可通过,  宽 0.80m): 中心 Y=-3.00 → 缺口 Y: -3.40 ~ -2.60
+         通道B (不可通过,宽 0.35m): 中心 Y=+3.20 → 缺口 Y: +3.025 ~ +3.375
+    ================================================================ -->
+    <!-- 段1: Y= -5.0 ~ -3.4  中心 Y=-4.20  half=0.80 -->
+    <geom name="par_s1" type="box" size="0.1 0.80 1.3"
+          pos="2 -4.20 1.3" material="wall" conaffinity="7"/>
+    <!-- 段2: Y= -2.6 ~ +3.025 中心 Y=+0.2125 half=2.8125 -->
+    <geom name="par_s2" type="box" size="0.1 2.8125 1.3"
+          pos="2 0.2125 1.3" material="wall" conaffinity="7"/>
+    <!-- 段3: Y=+3.375 ~ +5.0  中心 Y=+4.1875 half=0.8125 -->
+    <geom name="par_s3" type="box" size="0.1 0.8125 1.3"
+          pos="2 4.1875 1.3" material="wall" conaffinity="7"/>
+
+    <!-- 通道A 两侧警示柱 (黄色标识) -->
+    <geom name="marker_A1" type="cylinder" size="0.04 0.5"
+          pos="2 -3.42 0.5" material="warning" conaffinity="7"/>
+    <geom name="marker_A2" type="cylinder" size="0.04 0.5"
+          pos="2 -2.58 0.5" material="warning" conaffinity="7"/>
+    <!-- 通道B 两侧警示柱 -->
+    <geom name="marker_B1" type="cylinder" size="0.04 0.5"
+          pos="2 3.02 0.5"  material="warning" conaffinity="7"/>
+    <geom name="marker_B2" type="cylinder" size="0.04 0.5"
+          pos="2 3.38 0.5"  material="warning" conaffinity="7"/>
+
+    <!-- ================================================================
+         玻璃隔断  (东区 X=5 附近, 模拟办公隔断/展示柜侧壁)
+         共两段玻璃 + 中间留 1.2m 通道
+    ================================================================ -->
+    <!-- 玻璃段1: Y= +1.0 ~ +4.8 -->
+    <geom name="glass1" type="box" size="0.04 1.9 1.0"
+          pos="5 2.9 1.0" material="glass" conaffinity="7" condim="3"/>
+    <!-- 玻璃段1 上方实体横梁 -->
+    <geom name="glass1_beam" type="box" size="0.06 1.9 0.15"
+          pos="5 2.9 2.15" material="metal" conaffinity="7"/>
+    <!-- 玻璃段2: Y= -4.8 ~ -1.8 -->
+    <geom name="glass2" type="box" size="0.04 1.5 1.0"
+          pos="5 -3.3 1.0" material="glass" conaffinity="7" condim="3"/>
+    <!-- 玻璃段2 上方横梁 -->
+    <geom name="glass2_beam" type="box" size="0.06 1.5 0.15"
+          pos="5 -3.3 2.15" material="metal" conaffinity="7"/>
+    <!-- 玻璃段竖向边框 (铝合金框) -->
+    <geom name="glass1_frameL" type="box" size="0.05 0.05 1.1"
+          pos="5 1.05 1.1" material="metal" conaffinity="7"/>
+    <geom name="glass1_frameR" type="box" size="0.05 0.05 1.1"
+          pos="5 4.75 1.1" material="metal" conaffinity="7"/>
+    <geom name="glass2_frameL" type="box" size="0.05 0.05 1.1"
+          pos="5 -4.75 1.1" material="metal" conaffinity="7"/>
+    <geom name="glass2_frameR" type="box" size="0.05 0.05 1.1"
+          pos="5 -1.85 1.1" material="metal" conaffinity="7"/>
+
+    <!-- ================================================================
+         西区 ── 工作台  (贴南墙, 壁厚 0.1m 内侧 y=-4.9)
+         工作台: 高 0.85m, 台面厚 0.03m
+         台基 half_z=0.41 → 顶面 z=0.82, 台面 center z=0.835
+    ================================================================ -->
+    <!-- 工作台W1: 2.4m 长, 位于西南 x=-7 -->
+    <geom name="wbench1"     type="box" size="1.2 0.32 0.41"
+          pos="-7   -4.47 0.41" material="wood" conaffinity="7"/>
+    <geom name="wbench1_top" type="box" size="1.2 0.32 0.015"
+          pos="-7   -4.47 0.835" material="metal" conaffinity="7"/>
+    <!-- 工作台W2: 2.0m 长, x=-2 -->
+    <geom name="wbench2"     type="box" size="1.0 0.32 0.41"
+          pos="-2   -4.47 0.41" material="wood" conaffinity="7"/>
+    <geom name="wbench2_top" type="box" size="1.0 0.32 0.015"
+          pos="-2   -4.47 0.835" material="metal" conaffinity="7"/>
+
+    <!-- ================================================================
+         西区 ── 会议桌 + 椅子  (x=-5.5, y=0)
+         桌: 3.2m×1.4m, 高 0.75m
+    ================================================================ -->
+    <geom name="conf_table" type="box" size="1.6 0.70 0.37"
+          pos="-5.5 0 0.37"  material="wood"  conaffinity="7"/>
+    <geom name="conf_top"   type="box" size="1.6 0.70 0.015"
+          pos="-5.5 0 0.755" material="metal" conaffinity="7"/>
+    <!-- 椅子 (南侧4把) -->
+    <geom name="cs1" type="box" size="0.21 0.21 0.22" pos="-7.0 -0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cs2" type="box" size="0.21 0.21 0.22" pos="-6.2 -0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cs3" type="box" size="0.21 0.21 0.22" pos="-5.4 -0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cs4" type="box" size="0.21 0.21 0.22" pos="-4.6 -0.95 0.22" material="chair" conaffinity="7"/>
+    <!-- 椅子 (北侧4把) -->
+    <geom name="cn1" type="box" size="0.21 0.21 0.22" pos="-7.0  0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cn2" type="box" size="0.21 0.21 0.22" pos="-6.2  0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cn3" type="box" size="0.21 0.21 0.22" pos="-5.4  0.95 0.22" material="chair" conaffinity="7"/>
+    <geom name="cn4" type="box" size="0.21 0.21 0.22" pos="-4.6  0.95 0.22" material="chair" conaffinity="7"/>
+    <!-- 椅背 (薄板) -->
+    <geom name="cb_s1" type="box" size="0.21 0.04 0.24" pos="-7.0 -1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_s2" type="box" size="0.21 0.04 0.24" pos="-6.2 -1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_s3" type="box" size="0.21 0.04 0.24" pos="-5.4 -1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_s4" type="box" size="0.21 0.04 0.24" pos="-4.6 -1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_n1" type="box" size="0.21 0.04 0.24" pos="-7.0  1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_n2" type="box" size="0.21 0.04 0.24" pos="-6.2  1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_n3" type="box" size="0.21 0.04 0.24" pos="-5.4  1.12 0.60" material="chair" conaffinity="7"/>
+    <geom name="cb_n4" type="box" size="0.21 0.04 0.24" pos="-4.6  1.12 0.60" material="chair" conaffinity="7"/>
+
+    <!-- ================================================================
+         西区 ── 独立办公桌 (贴西墙)
+    ================================================================ -->
+    <!-- 办公桌D1: x=-9.3, y=+3.0 -->
+    <geom name="desk1"  type="box" size="0.62 0.33 0.37" pos="-9.3  3.0 0.37" material="wood" conaffinity="7"/>
+    <geom name="dsk1_t" type="box" size="0.62 0.33 0.015" pos="-9.3  3.0 0.755" material="metal" conaffinity="7"/>
+    <geom name="dsk1_c" type="box" size="0.20 0.20 0.22"  pos="-9.3  2.1 0.22"  material="chair" conaffinity="7"/>
+    <!-- 办公桌D2: x=-9.3, y=-3.0 -->
+    <geom name="desk2"  type="box" size="0.62 0.33 0.37" pos="-9.3 -3.0 0.37" material="wood" conaffinity="7"/>
+    <geom name="dsk2_t" type="box" size="0.62 0.33 0.015" pos="-9.3 -3.0 0.755" material="metal" conaffinity="7"/>
+    <geom name="dsk2_c" type="box" size="0.20 0.20 0.22"  pos="-9.3 -2.1 0.22"  material="chair" conaffinity="7"/>
+
+    <!-- ================================================================
+         西区 ── 工作台W3 (贴北墙)
+    ================================================================ -->
+    <geom name="wbench3"     type="box" size="2.0 0.32 0.41"
+          pos="-6.5 4.47 0.41"  material="wood" conaffinity="7"/>
+    <geom name="wbench3_top" type="box" size="2.0 0.32 0.015"
+          pos="-6.5 4.47 0.835" material="metal" conaffinity="7"/>
+
+    <!-- ================================================================
+         东区 ── 实验台 (L 形布局, 高 0.90m 仿洁净台)
+    ================================================================ -->
+    <!-- 横向台: 3.6m × 0.8m -->
+    <geom name="lab1"     type="box" size="1.8 0.40 0.45" pos="6.5 -1.2 0.45" material="wood"  conaffinity="7"/>
+    <geom name="lab1_top" type="box" size="1.8 0.40 0.02" pos="6.5 -1.2 0.92" material="metal" conaffinity="7"/>
+    <!-- 纵向台: 0.8m × 2.0m (L形转角) -->
+    <geom name="lab2"     type="box" size="0.40 1.0 0.45" pos="8.05 0.2 0.45" material="wood"  conaffinity="7"/>
+    <geom name="lab2_top" type="box" size="0.40 1.0 0.02" pos="8.05 0.2 0.92" material="metal" conaffinity="7"/>
+
+    <!-- ================================================================
+         东区 ── 服务器/设备机柜 (贴东墙)  高 2.0m
+    ================================================================ -->
+    <geom name="rack1" type="box" size="0.30 0.52 1.0" pos="9.65  2.2 1.0" material="equip" conaffinity="7"/>
+    <geom name="rack2" type="box" size="0.30 0.52 1.0" pos="9.65  0.9 1.0" material="equip" conaffinity="7"/>
+    <geom name="rack3" type="box" size="0.30 0.52 1.0" pos="9.65 -0.4 1.0" material="equip" conaffinity="7"/>
+    <!-- 机柜指示灯条 (装饰性, 绿色薄片) -->
+    <geom name="rack1_led" type="box" size="0.01 0.48 0.02" pos="9.34 2.2 1.7" rgba="0.1 0.9 0.2 1" conaffinity="0"/>
+    <geom name="rack2_led" type="box" size="0.01 0.48 0.02" pos="9.34 0.9 1.7" rgba="0.1 0.9 0.2 1" conaffinity="0"/>
+
+    <!-- ================================================================
+         东区 ── 工作台E1 (贴北墙)
+    ================================================================ -->
+    <geom name="wbench_e1"     type="box" size="1.4 0.32 0.41"
+          pos="6.5 4.47 0.41"  material="wood" conaffinity="7"/>
+    <geom name="wbench_e1_top" type="box" size="1.4 0.32 0.015"
+          pos="6.5 4.47 0.835" material="metal" conaffinity="7"/>
+
+    <!-- ================================================================
+         台面上摆放的仪器设备 (小型箱体)
+    ================================================================ -->
+    <!-- W1台面: 示波器 + 电源 -->
+    <geom name="inst1" type="box" size="0.18 0.16 0.12" pos="-7.8 -4.47 0.97" material="equip" conaffinity="7"/>
+    <geom name="inst2" type="box" size="0.12 0.12 0.15" pos="-7.1 -4.47 1.00" material="equip" conaffinity="7"/>
+    <!-- W2台面 -->
+    <geom name="inst3" type="box" size="0.15 0.18 0.10" pos="-2.5 -4.47 0.94" material="equip" conaffinity="7"/>
+    <!-- 实验台面 -->
+    <geom name="inst4" type="box" size="0.20 0.20 0.14" pos="5.8 -1.2 1.06"  material="equip" conaffinity="7"/>
+    <geom name="inst5" type="box" size="0.14 0.14 0.20" pos="6.5 -1.2 1.12"  material="equip" conaffinity="7"/>
+
+    <!-- ================================================================
+         地面散落障碍物 (纸箱/设备箱)
+    ================================================================ -->
+    <!-- 西区中部 -->
+    <geom name="cbox1" type="box" size="0.30 0.30 0.38" pos="-3.5  2.0 0.38" material="carton" conaffinity="7"/>
+    <geom name="cbox2" type="box" size="0.25 0.40 0.30" pos="-3.0  2.6 0.30" material="carton" conaffinity="7"/>
+    <!-- 通道A 西侧 (阻碍路径但仍可绕过) -->
+    <geom name="cbox3" type="box" size="0.30 0.22 0.42" pos="-1.5 -2.8 0.42" material="carton" conaffinity="7"/>
+    <!-- 东区 -->
+    <geom name="cbox4" type="box" size="0.35 0.25 0.50" pos="3.5 -3.8 0.50" material="carton" conaffinity="7"/>
+    <geom name="cbox5" type="box" size="0.22 0.22 0.28" pos="2.8 -3.2 0.28" material="carton" conaffinity="7"/>
+    <!-- 通道B 东侧 (进一步加强不可通行感) -->
+    <geom name="cbox6" type="box" size="0.28 0.28 0.45" pos="3.2  3.5 0.45" material="carton" conaffinity="7"/>
+
+    <!-- ================================================================
+         结构柱 (模拟建筑承重柱, 截面 0.3m×0.3m)
+    ================================================================ -->
+    <geom name="col1" type="box" size="0.15 0.15 1.4" pos="-3.3  4.8 1.4" material="wall" conaffinity="7"/>
+    <geom name="col2" type="box" size="0.15 0.15 1.4" pos="-3.3 -4.8 1.4" material="wall" conaffinity="7"/>
+    <geom name="col3" type="box" size="0.15 0.15 1.4" pos=" 3.3  4.8 1.4" material="wall" conaffinity="7"/>
+    <geom name="col4" type="box" size="0.15 0.15 1.4" pos=" 3.3 -4.8 1.4" material="wall" conaffinity="7"/>
+
+    <!-- ================================================================
+         其他真实测试要素
+    ================================================================ -->
+    <!-- 消防栓箱 (贴西墙) -->
+    <geom name="fire_box" type="box" size="0.08 0.25 0.35" pos="-9.92 0 1.2" material="equip" conaffinity="7"/>
+    <!-- 配电柜 (贴南墙, 东区) -->
+    <geom name="elec_panel" type="box" size="0.12 0.50 0.90" pos="4.0 -4.88 0.90" material="equip" conaffinity="7"/>
+    <!-- 移动推车 (东区过道) -->
+    <geom name="cart" type="box" size="0.35 0.25 0.45" pos="2.5 1.5 0.45" material="metal" conaffinity="7"/>
+    <!-- 废料桶 -->
+    <geom name="bin1" type="cylinder" size="0.18 0.30" pos="-8.5  4.7 0.30" material="equip" conaffinity="7"/>
+    <geom name="bin2" type="cylinder" size="0.18 0.30" pos=" 9.0  4.7 0.30" material="equip" conaffinity="7"/>
+
+    <!-- ================================================================
+         动态障碍物 (静态地图中不存在, 用于测试 Nav2 动态避障)
+         使用 mocap="true"：
+           - 不占用 qpos，不受 sim2sim_nav.py 的 data.qpos[-N:] 干扰
+           - 始终精确定位在指定位置，不会因物理爆炸消失
+           - LiDAR 正常扫描，机器人可碰撞
+           - 可在 Python 中通过 data.mocap_pos[id] 实时移动
+         Python 移动示例:
+           pid = model.body('dyn_person').id
+           mid = model.body_mocapid[pid]
+           data.mocap_pos[mid] = [new_x, new_y, 0.85]
+    ================================================================ -->
+
+    <!-- 动态障碍1: 模拟行人  (通道A 西侧入口前方)
+         位置: X=0.5, Y=-3.0 — 静态地图中此处为开阔走廊           -->
+    <geom name="dyn_person_body" type="cylinder" size="0.22 0.85"
+          pos="0.5 -3.0 0.85"
+          rgba="0.90 0.30 0.15 1"
+          conaffinity="7" condim="3"/>
+    <geom name="dyn_person_head" type="sphere" size="0.14"
+          pos="0.5 -3.0 1.84"
+          rgba="0.90 0.30 0.15 1"
+          conaffinity="7" condim="3"/>
+
+    <!-- 动态障碍2: 模拟设备箱/推车  (西区主导航路径中段)
+         位置: X=-1.5, Y=1.8 — 静态地图中此处为开阔地带           -->
+    <geom name="dyn_box_geom" type="box" size="0.30 0.25 0.35"
+          pos="-1.5 1.8 0.35"
+          rgba="0.15 0.55 0.90 1"
+          conaffinity="7" condim="3"/>
+
+    <!-- 动态障碍3: 模拟临时堆放纸箱  (通道A 东侧出口)
+         位置: X=3.5, Y=-3.0 — 机器人穿过通道A后正面遇到           -->
+    <geom name="dyn_crate_geom" type="box" size="0.25 0.20 0.25"
+          pos="3.5 -3.0 0.25"
+          rgba="0.75 0.65 0.15 1"
+          conaffinity="7" condim="3"/>
+
+  </worldbody>
+</mujoco>

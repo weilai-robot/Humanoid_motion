@@ -1,0 +1,371 @@
+publish_frequecy: 1000.0      # 数据发布频率
+imu_dcu_name: hip             # IMU数据来源，下肢DCU
+enable_actuator: true         # 使能所有执行器
+actuator_debug: true         # 发布所有执行器的调试数据
+
+joint_list:                   # 关节列表
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_pitch_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_pitch_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+
+  - lumbar_roll_joint
+  - lumbar_pitch_joint
+  - lumbar_yaw_joint
+
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_pitch_joint
+  - left_elbow_yaw_joint
+  - left_wrist_pitch_joint
+  - left_wrist_roll_joint
+  # - left_claw_joint
+
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_pitch_joint
+  - right_elbow_yaw_joint
+  - right_wrist_pitch_joint
+  - right_wrist_roll_joint
+  # - right_claw_joint      
+
+actuator_list:  # 执行器列表
+  - left_hip_pitch_actuator
+  - left_hip_roll_actuator
+  - left_hip_yaw_actuator
+  - left_knee_pitch_actuator
+  - left_ankle_left_actuator
+  - left_ankle_right_actuator
+
+  - right_hip_pitch_actuator
+  - right_hip_roll_actuator
+  - right_hip_yaw_actuator
+  - right_knee_pitch_actuator
+  - right_ankle_left_actuator
+  - right_ankle_right_actuator
+
+  - lumbar_left_actuator
+  - lumbar_right_actuator
+  - lumbar_yaw_actuator
+
+  - left_shoulder_pitch_actuator
+  - left_shoulder_roll_actuator
+  - left_shoulder_yaw_actuator
+  - left_elbow_pitch_actuator
+  - left_elbow_yaw_actuator
+  - left_wrist_front_actuator
+  - left_wrist_back_actuator
+  # - left_claw_actuator
+
+  - right_shoulder_pitch_actuator
+  - right_shoulder_roll_actuator
+  - right_shoulder_yaw_actuator
+  - right_elbow_pitch_actuator
+  - right_elbow_yaw_actuator
+  - right_wrist_back_actuator
+  - right_wrist_front_actuator
+  # - right_claw_actuator
+
+ethercat:
+  ifname: enp2s0          # 网卡名
+  bind_cpu: 9             # 绑定CPU核心
+  rt_priority: 90         # 线程优先级
+  enable_dc: true         # 使能DC同步
+  cycle_time_ns: 1000000  # 刷新周期1ms - 1khz
+
+dcu_network:              # DCU通信网络，请根据实机连接情况配置
+  - name: body            # DCU索引名字
+    ecat_id: 1            # DCU在EtherCAT网络中的ID，从主站开始，第一个从站ID为1，依次增加
+    enable: true          # 使能该DCU
+    imu_enable: false     # 不使用该DCU的IMU
+    channel_1:            # DCU的CTRL-1通道配置
+      - name: left_shoulder_pitch_actuator    # 执行器索引名字，不需要控制的执行器可直接注释掉
+        type: POWER_FLOW_R86                  # 该执行器的类型
+        can_id: 1                             # 该执行器的CAN ID
+      - name: left_shoulder_roll_actuator
+        type: POWER_FLOW_R86
+        can_id: 2
+      - name: left_shoulder_yaw_actuator
+        type: POWER_FLOW_R52
+        can_id: 3
+      - name: left_elbow_pitch_actuator
+        type: POWER_FLOW_R52
+        can_id: 4
+      - name: left_elbow_yaw_actuator
+        type: POWER_FLOW_R52
+        can_id: 5
+      - name: left_wrist_front_actuator
+        type: POWER_FLOW_L28
+        can_id: 6
+      - name: left_wrist_back_actuator
+        type: POWER_FLOW_L28
+        can_id: 7
+      # - name: left_claw_actuator
+      #   type: OMNI_PICKER
+      #   can_id: 8
+    channel_2:
+      - name: right_shoulder_pitch_actuator
+        type: POWER_FLOW_R86
+        can_id: 1
+      - name: right_shoulder_roll_actuator
+        type: POWER_FLOW_R86
+        can_id: 2
+      - name: right_shoulder_yaw_actuator
+        type: POWER_FLOW_R52
+        can_id: 3
+      - name: right_elbow_pitch_actuator
+        type: POWER_FLOW_R52
+        can_id: 4
+      - name: right_elbow_yaw_actuator
+        type: POWER_FLOW_R52
+        can_id: 5
+      - name: right_wrist_back_actuator
+        type: POWER_FLOW_L28
+        can_id: 6
+      - name: right_wrist_front_actuator
+        type: POWER_FLOW_L28
+        can_id: 7
+      # - name: right_claw_actuator
+      #   type: OMNI_PICKER
+      #   can_id: 8
+    channel_3:
+      - name: lumbar_left_actuator
+        type: POWER_FLOW_R86
+        can_id: 1
+      - name: lumbar_right_actuator
+        type: POWER_FLOW_R86
+        can_id: 2
+  - name: hip
+    ecat_id: 2
+    enable: true
+    imu_enable: true
+    channel_1:
+      - name: left_hip_pitch_actuator
+        type: POWER_FLOW_R86
+        can_id: 1
+      - name: left_hip_roll_actuator
+        type: POWER_FLOW_R86
+        can_id: 2
+      - name: left_hip_yaw_actuator
+        type: POWER_FLOW_R86
+        can_id: 3
+      - name: left_knee_pitch_actuator
+        type: POWER_FLOW_R86
+        can_id: 4
+      - name: left_ankle_right_actuator
+        type: POWER_FLOW_R52
+        can_id: 5
+      - name: left_ankle_left_actuator
+        type: POWER_FLOW_R52
+        can_id: 6
+    channel_2:
+      - name: right_hip_pitch_actuator
+        type: POWER_FLOW_R86
+        can_id: 1
+      - name: right_hip_roll_actuator
+        type: POWER_FLOW_R86
+        can_id: 2
+      - name: right_hip_yaw_actuator
+        type: POWER_FLOW_R86
+        can_id: 3
+      - name: right_knee_pitch_actuator
+        type: POWER_FLOW_R86
+        can_id: 4
+      - name: right_ankle_left_actuator
+        type: POWER_FLOW_R52
+        can_id: 5
+      - name: right_ankle_right_actuator
+        type: POWER_FLOW_R52
+        can_id: 6
+    channel_3:
+      - name: lumbar_yaw_actuator
+        type: POWER_FLOW_R86
+        can_id: 1
+
+transmission:                               # 传动层配置
+  - name: left_shoulder_pitch_trans         # 传动索引名称
+    type: SimpleTransmission                # 传动类型，简单传动
+    joint: left_shoulder_pitch_joint        # 绑定的关节
+    actuator: left_shoulder_pitch_actuator  # 绑定的执行器
+    direction: 1.0                          # 方向
+
+  - name: left_shoulder_roll_trans        
+    type: SimpleTransmission              
+    joint: left_shoulder_roll_joint        
+    actuator: left_shoulder_roll_actuator  
+    direction: -1.0                         
+
+  - name: left_shoulder_yaw_trans
+    type: SimpleTransmission
+    joint: left_shoulder_yaw_joint
+    actuator: left_shoulder_yaw_actuator
+    direction: 1.0
+
+  - name: left_elbow_pitch_trans
+    type: SimpleTransmission
+    joint: left_elbow_pitch_joint
+    actuator: left_elbow_pitch_actuator
+    direction: 1.0
+
+  - name: left_elbow_yaw_trans
+    type: SimpleTransmission
+    joint: left_elbow_yaw_joint
+    actuator: left_elbow_yaw_actuator
+    direction: 1.0
+
+  - name: left_wrist_parallel_trans
+    type: LeftWristParallelTransmission
+    joint_pitch: left_wrist_pitch_joint
+    joint_roll: left_wrist_roll_joint
+    actuator_left: left_wrist_front_actuator
+    actuator_right: left_wrist_back_actuator
+    direction_left: 1.0
+    direction_right: 1.0
+    param_path: null
+
+  # - name: left_claw_trans
+  #   type: SimpleTransmission
+  #   joint: left_claw_joint
+  #   actuator: left_claw_actuator
+  #   direction: 1.0
+
+  - name: right_shoulder_pitch_trans
+    type: SimpleTransmission
+    joint: right_shoulder_pitch_joint
+    actuator: right_shoulder_pitch_actuator
+    direction: -1.0
+
+  - name: right_shoulder_roll_trans
+    type: SimpleTransmission
+    joint: right_shoulder_roll_joint
+    actuator: right_shoulder_roll_actuator
+    direction: 1.0
+
+  - name: right_shoulder_yaw_trans
+    type: SimpleTransmission
+    joint: right_shoulder_yaw_joint
+    actuator: right_shoulder_yaw_actuator
+    direction: 1.0
+
+  - name: right_elbow_pitch_trans
+    type: SimpleTransmission
+    joint: right_elbow_pitch_joint
+    actuator: right_elbow_pitch_actuator
+    direction: -1.0
+
+  - name: right_elbow_yaw_trans
+    type: SimpleTransmission
+    joint: right_elbow_yaw_joint
+    actuator: right_elbow_yaw_actuator
+    direction: 1.0
+
+  - name: right_wrist_parallel_trans
+    type: RightWristParallelTransmission
+    joint_pitch: right_wrist_pitch_joint
+    joint_roll: right_wrist_roll_joint
+    actuator_left: right_wrist_front_actuator
+    actuator_right: right_wrist_back_actuator
+    direction_left: 1.0
+    direction_right: 1.0
+    param_path: null
+
+  # - name: right_claw_trans
+  #   type: SimpleTransmission
+  #   joint: right_claw_joint
+  #   actuator: right_claw_actuator
+  #   direction: 1.0
+
+  - name: lumbar_parallel_trans
+    type: LumbarParallelTransmission
+    joint_pitch: lumbar_pitch_joint
+    joint_roll: lumbar_roll_joint
+    actuator_left: lumbar_left_actuator
+    actuator_right: lumbar_right_actuator
+    direction_left: 1.0
+    direction_right: 1.0
+    param_path: null
+
+  - name: lumbar_yaw_trans
+    type: SimpleTransmission
+    joint: lumbar_yaw_joint
+    actuator: lumbar_yaw_actuator
+    direction: 1.0
+
+  - name: left_hip_pitch_trans
+    type: SimpleTransmission
+    joint: left_hip_pitch_joint
+    actuator: left_hip_pitch_actuator
+    direction: -1.0
+
+  - name: left_hip_roll_trans
+    type: SimpleTransmission
+    joint: left_hip_roll_joint
+    actuator: left_hip_roll_actuator
+    direction: -1.0
+
+  - name: left_hip_yaw_trans
+    type: SimpleTransmission
+    joint: left_hip_yaw_joint
+    actuator: left_hip_yaw_actuator
+    direction: -1.0
+
+  - name: left_knee_pitch_trans
+    type: SimpleTransmission
+    joint: left_knee_pitch_joint
+    actuator: left_knee_pitch_actuator
+    direction: -1.0
+
+  - name: left_ankle_parallel_trans
+    type: LeftAnkleParallelTransmission
+    joint_pitch: left_ankle_pitch_joint
+    joint_roll: left_ankle_roll_joint
+    actuator_left: left_ankle_left_actuator
+    actuator_right: left_ankle_right_actuator
+    direction_left: 1.0
+    direction_right: 1.0
+    param_path: cfg/dcu_driver_module/ankle_trans_x1.yaml
+
+  - name: right_hip_pitch_trans
+    type: SimpleTransmission
+    joint: right_hip_pitch_joint
+    actuator: right_hip_pitch_actuator
+    direction: -1.0
+
+  - name: right_hip_roll_trans
+    type: SimpleTransmission
+    joint: right_hip_roll_joint
+    actuator: right_hip_roll_actuator
+    direction: -1.0
+
+  - name: right_hip_yaw_trans
+    type: SimpleTransmission
+    joint: right_hip_yaw_joint
+    actuator: right_hip_yaw_actuator
+    direction: -1.0
+
+  - name: right_knee_pitch_trans
+    type: SimpleTransmission
+    joint: right_knee_pitch_joint
+    actuator: right_knee_pitch_actuator
+    direction: 1.0
+
+  - name: right_ankle_parallel_trans              # 传动索引名称
+    type: RightAnkleParallelTransmission          # 传动类型：脚踝关节并联传动
+    joint_pitch: right_ankle_pitch_joint          # 绑定的 pitch 关节
+    joint_roll: right_ankle_roll_joint            # 绑定的 roll 关节
+    actuator_left: right_ankle_left_actuator      # 绑定的 左侧连杆执行器
+    actuator_right: right_ankle_right_actuator    # 绑定的 右侧连杆执行器
+    direction_left: 1.0                           # 左侧连杆执行器的方向
+    direction_right: 1.0                          # 右侧连杆执行器的方向
+    param_path: cfg/dcu_driver_module/ankle_trans_x1.yaml  # 其他配置参数

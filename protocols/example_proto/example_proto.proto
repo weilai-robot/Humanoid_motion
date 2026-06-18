@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package xyber_x1_infer.example_proto;
+
+// define your messages here
+message change_me {
+  int32 num = 1;
+}
