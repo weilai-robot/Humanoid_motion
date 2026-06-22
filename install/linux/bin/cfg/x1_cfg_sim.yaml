@@ -32,8 +32,12 @@ aimrt:
       - type: local
       - type: ros2
     pub_topics_options: # 为 publish topic 选择后端
-      - topic_name: "(.*)"
+      - topic_name: "/joint_cmd"
+        enable_backends: [local]
+      - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|cmd_vel|cmd_vel_limiter|imu/data|joint_states|livox/imu|mujoco/base_pose|mujoco/ground_truth)"
         enable_backends: [local, ros2]
+      - topic_name: "(.*)"
+        enable_backends: [local]
     sub_topics_options: # 为 subscribe topic 选择后端
       - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|cmd_vel_limiter)"
         enable_backends: [local, ros2]  # 允许外部 ROS2 节点发布模式指令和速度指令
