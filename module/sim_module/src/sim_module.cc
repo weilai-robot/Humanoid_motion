@@ -70,6 +70,9 @@ bool SimModule::Start() {
     if (m_) {
       const std::unique_lock<std::recursive_mutex> lock(sim_->mtx);
       d_ = mj_makeData(m_);
+      if (m_->nkey > 0) {
+        mj_resetDataKeyframe(m_, d_, 0);
+      }
     }
     is_render_thread_running_ = true;
     sim_->RenderLoop();

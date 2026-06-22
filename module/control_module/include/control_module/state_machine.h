@@ -1,5 +1,8 @@
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <iostream>
+#include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <memory>
@@ -27,16 +30,25 @@ class StateMachine {
   StateMachine() = default;
   ~StateMachine() = default;
 
-  void Init(const YAML::Node &node) {
+  void Init(const YAML::Node &node, const std::string &initial_state_name = "") {
     trigger_state_map_.clear();
     for (auto iter = node.begin(); iter != node.end(); iter++) {
       State state(iter->first.as<std::string>(), iter->second);
       trigger_state_map_[iter->second["trigger_topic"].as<std::string>()].push_back(state);
     }
 
-    // 初始化状态，将 yaml 中第一个状态作为初始状态
-    current_state_name_ = node.begin()->first.as<std::string>();
-    controllers_ = trigger_state_map_[node.begin()->second["trigger_topic"].as<std::string>()][0].controllers_;
+    // 初始化状态，默认使用 yaml 中第一个状态；可通过 initial_state 显式覆盖。
+    auto initial_iter = node.begin();
+    if (!initial_state_name.empty()) {
+      for (auto iter = node.begin(); iter != node.end(); iter++) {
+        if (iter->first.as<std::string>() == initial_state_name) {
+          initial_iter = iter;
+          break;
+        }
+      }
+    }
+    current_state_name_ = initial_iter->first.as<std::string>();
+    controllers_ = trigger_state_map_[initial_iter->second["trigger_topic"].as<std::string>()][0].controllers_;
   }
 
   bool OnEvent(const std::string &trigger_topic) {

@@ -1,5 +1,6 @@
 control_frequecy: 1000
 use_sim_handles: True
+initial_state: stand
 
 sub_joy_vel_name: /cmd_vel_limiter      # controller 接收的运动指令
 sub_imu_data_name: /imu/data            # IMU数据

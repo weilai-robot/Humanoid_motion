@@ -20,12 +20,16 @@ void PDController::Init(const YAML::Node &cfg_node) {
   joint_state_data_.position.resize(joint_names_.size(), 0.0);
   joint_state_data_.velocity.resize(joint_names_.size(), 0.0);
   joint_state_data_.effort.resize(joint_names_.size(), 0.0);
-  start_joint_angles_.resize(joint_names_.size(), 0.0);
 
   // 初始化 joint_conf_
   joint_conf_.init_state = Eigen::Map<vector_t>(cfg_node["init_state"].as<std::vector<double>>().data(), cfg_node["init_state"].as<std::vector<double>>().size());
   joint_conf_.stiffness = Eigen::Map<vector_t>(cfg_node["stiffness"].as<std::vector<double>>().data(), cfg_node["stiffness"].as<std::vector<double>>().size());
   joint_conf_.damping = Eigen::Map<vector_t>(cfg_node["damping"].as<std::vector<double>>().data(), cfg_node["damping"].as<std::vector<double>>().size());
+  if (use_sim_handles_) {
+    start_joint_angles_ = cfg_node["init_state"].as<std::vector<double>>();
+  } else {
+    start_joint_angles_.resize(joint_names_.size(), 0.0);
+  }
   // std::cout << "init_state: " << joint_conf_.init_state.transpose() << std::endl;
   // std::cout << "stiffness: " << joint_conf_.stiffness.transpose() << std::endl;
   // std::cout << "damping: " << joint_conf_.damping.transpose() << std::endl;

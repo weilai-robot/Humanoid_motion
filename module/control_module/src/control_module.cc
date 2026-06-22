@@ -21,7 +21,10 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
 
       // 解析状态机
       last_trigger_time_ = high_resolution_clock::now();
-      state_machine_.Init(cfg_node["robot_states"]);
+      const std::string initial_state =
+          cfg_node["initial_state"] ? cfg_node["initial_state"].as<std::string>() : "";
+      state_machine_.Init(cfg_node["robot_states"], initial_state);
+      last_state_name_ = state_machine_.GetCurrentState();
       for (auto iter = cfg_node["robot_states"].begin(); iter != cfg_node["robot_states"].end(); iter++) {
         auto trigger_topic = iter->second["trigger_topic"].as<std::string>();
         if (trigger_topics_.find(trigger_topic) != trigger_topics_.end()) {
