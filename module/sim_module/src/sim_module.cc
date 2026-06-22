@@ -55,6 +55,7 @@ bool SimModule::Initialize(aimrt::CoreRef core) {
 }
 
 bool SimModule::Start() {
+  sim_ready_.store(false, std::memory_order_release);
   mjv_defaultCamera(&cam_);
   mjv_defaultOption(&opt_);
   mjv_defaultPerturb(&pert_);
@@ -130,11 +131,13 @@ bool SimModule::Start() {
     }
   }
 
+  sim_ready_.store(true, std::memory_order_release);
   AIMRT_INFO("Started succeeded.");
   return true;
 }
 
 void SimModule::Shutdown() {
+  sim_ready_.store(false, std::memory_order_release);
   free(ctrl_noise_);
   mj_deleteData(d_);
   mj_deleteModel(m_);
@@ -142,6 +145,10 @@ void SimModule::Shutdown() {
 }
 
 void SimModule::CmdCallback(const std::shared_ptr<const my_ros2_proto::msg::JointCommand>& msg) {
+  if (!sim_ready_.load(std::memory_order_acquire) || !sim_ || !m_ || !d_) {
+    return;
+  }
+
   sensor_msgs::msg::Imu imu_data_msg;
   sensor_msgs::msg::JointState joint_states_msg;
 

@@ -1,6 +1,7 @@
 // Copyright (c) 2023, AgiBot Inc.
 // All rights reserved.
 #pragma once
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -83,6 +84,7 @@ class SimModule : public aimrt::ModuleBase {
   mjData* d_ = nullptr;
   mjtNum* ctrl_noise_ = nullptr;
   std::shared_ptr<mj::Simulate> sim_;
+  std::atomic<bool> sim_ready_{false};
   std::string filename_;
   mjvCamera cam_;
   mjvOption opt_;
