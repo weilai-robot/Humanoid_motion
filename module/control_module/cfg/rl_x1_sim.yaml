@@ -124,6 +124,96 @@ joint_offset:
   right_ankle_roll_joint: 0.0
 # ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
 
+joint_limits:
+  lumbar_yaw_joint:
+    lower: -1
+    upper: 1
+  lumbar_roll_joint:
+    lower: -0.25
+    upper: 0.25
+  lumbar_pitch_joint:
+    lower: -0.45
+    upper: 0.15
+  left_shoulder_pitch_joint:
+    lower: -2.5
+    upper: 1.5
+  left_shoulder_roll_joint:
+    lower: -2
+    upper: 0
+  left_shoulder_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  left_elbow_pitch_joint:
+    lower: 0
+    upper: 2
+  left_elbow_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  left_wrist_pitch_joint:
+    lower: -0.4
+    upper: 0.4
+  left_wrist_roll_joint:
+    lower: -0.4
+    upper: 0.4
+  right_shoulder_pitch_joint:
+    lower: -2.5
+    upper: 1.5
+  right_shoulder_roll_joint:
+    lower: -2
+    upper: 0
+  right_shoulder_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  right_elbow_pitch_joint:
+    lower: 0
+    upper: 2
+  right_elbow_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  right_wrist_pitch_joint:
+    lower: -0.4
+    upper: 0.4
+  right_wrist_roll_joint:
+    lower: -0.4
+    upper: 0.4
+  left_hip_pitch_joint:
+    lower: -1
+    upper: 2
+  left_hip_roll_joint:
+    lower: -1.5
+    upper: 0.2
+  left_hip_yaw_joint:
+    lower: -1.5
+    upper: 1.5
+  left_knee_pitch_joint:
+    lower: 0
+    upper: 2
+  left_ankle_pitch_joint:
+    lower: -0.41
+    upper: 0.35
+  left_ankle_roll_joint:
+    lower: -0.64
+    upper: 0.64
+  right_hip_pitch_joint:
+    lower: -2
+    upper: 1
+  right_hip_roll_joint:
+    lower: -0.2
+    upper: 1.5
+  right_hip_yaw_joint:
+    lower: -1.5
+    upper: 1.5
+  right_knee_pitch_joint:
+    lower: 0
+    upper: 2
+  right_ankle_pitch_joint:
+    lower: -0.41
+    upper: 0.35
+  right_ankle_roll_joint:
+    lower: -0.64
+    upper: 0.64
+# ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+
 
 # ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓ controllers list ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
 controllers:

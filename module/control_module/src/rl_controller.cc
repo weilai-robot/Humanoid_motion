@@ -57,6 +57,7 @@ void RLController::Init(const YAML::Node& cfg_node) {
 
   {
     const auto& limits_node = cfg_node["joint_limits"];
+    AIMRT_CHECK_ERROR_THROW(limits_node, "Missing joint_limits for RLController.");
     const size_t n = joint_names_.size();
     joint_conf_.pos_limit_lower.resize(n);
     joint_conf_.pos_limit_upper.resize(n);
