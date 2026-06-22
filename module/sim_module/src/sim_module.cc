@@ -145,11 +145,6 @@ void SimModule::CmdCallback(const std::shared_ptr<const my_ros2_proto::msg::Join
   sensor_msgs::msg::Imu imu_data_msg;
   sensor_msgs::msg::JointState joint_states_msg;
 
-  auto elapsed = high_resolution_clock::now() - start_time_;
-  if (elapsed <= milliseconds(3000)) {
-    return;
-  }
-
   const std::unique_lock<std::recursive_mutex> lock(sim_->mtx);
   WriteMotorCmd(*msg);
   mj_step(m_, d_);
