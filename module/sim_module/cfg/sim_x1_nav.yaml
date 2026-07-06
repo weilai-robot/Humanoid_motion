@@ -1,4 +1,4 @@
-# Navigation sim config — 用于 run_sim_nav.sh
+# Navigation sim config — 用于 run_mujoco_nav.sh
 # 与 sim_x1.yaml 的区别:
 #   1. 加载 nav 场景 (lab_env 实验室环境, 有墙壁/障碍物)
 #   2. 新增 lidar IMU + base pose 发布 (供 LiDAR bridge + FastLIO2)
