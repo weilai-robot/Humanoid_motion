@@ -41,29 +41,24 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
                 // printf("RestartController: %s\n", name.c_str());
                 controller_map_[name]->RestartController();
               }
-              AIMRT_INFO("Trigger event: [{}] -> {}", trigger_topic, now_state);
-              fprintf(stderr, "[ControlModule] State changed: '%s' -> '%s' (trigger: %s)\n",
-                      last_state_name_.c_str(), now_state.c_str(), trigger_topic.c_str());
+              AIMRT_INFO("Trigger event: [{}] state '{}' -> '{}'", trigger_topic, last_state_name_, now_state);
               
               // 检测进入 walk_leg 模式（从非 walk_leg 状态切换到 walk_leg 状态）
               if (now_state == "walk_leg" && last_state_name_ != "walk_leg") {
-                fprintf(stderr, "[ControlModule] walk_leg mode entered! Triggering walk_diag + tm_obs_input logging\n");
                 int rl_count = 0;
                 for (auto& [name, controller] : controller_map_) {
                   auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
                   if (rl_controller) {
                     rl_controller->SetWalkLegEntered(true);
                     rl_count++;
-                    fprintf(stderr, "[ControlModule] Notified RLController '%s' of walk_leg mode\n", name.c_str());
                   }
                 }
-                fprintf(stderr, "[ControlModule] Notified %d RLController(s) for logging\n", rl_count);
-                AIMRT_INFO("[Diag Trigger] Entered walk_leg mode, walk_diag and tm_obs_input logging will start");
+                AIMRT_INFO("[Diag Trigger] Entered walk_leg mode, notified {} controller(s), walk_diag and tm_obs_input logging will start", rl_count);
               }
 
               // 检测离开 walk_leg 模式（从 walk_leg 切换到其他状态），重置标志允许再次触发
               if (last_state_name_ == "walk_leg" && now_state != "walk_leg") {
-                fprintf(stderr, "[ControlModule] Left walk_leg mode -> '%s', resetting walk_leg_entered flag\n", now_state.c_str());
+                AIMRT_INFO("[Diag Trigger] Left walk_leg mode -> '{}', resetting walk_leg_entered flag", now_state);
                 for (auto& [name, controller] : controller_map_) {
                   auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
                   if (rl_controller) {
