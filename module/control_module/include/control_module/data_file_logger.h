@@ -18,8 +18,8 @@ class DataFileLogger {
   DataFileLogger& operator=(const DataFileLogger&) = delete;
 
   bool Open(const std::string& path, bool binary, bool append_newline);
-  void Close();
-  void Flush() const;
+  bool Close();
+  bool Flush() const;
   bool IsOpen() const;
 
   uint32_t GetLogLevel() const { return 0; }
@@ -31,10 +31,12 @@ class DataFileLogger {
            const char* log_data,
            size_t log_data_size) const;
 
-  void WriteTextLine(std::string_view line) const;
-  void WriteRaw(const void* data, size_t size) const;
+  bool WriteTextLine(std::string_view line) const;
+  bool WriteRaw(const void* data, size_t size) const;
 
  private:
+  bool Write(const char* data, size_t size) const;
+
   std::filesystem::path path_;
   bool binary_{false};
   bool append_newline_{false};

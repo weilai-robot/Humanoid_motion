@@ -21,8 +21,6 @@ aimrt:
     executors:
       - name: rl_control_pub_thread # 创建一个单线程执行器
         type: simple_thread
-      - name: rl_log_flush_thread
-        type: simple_thread
       - name: joy_stick_pub_thread
         type: simple_thread
       - name: sim_render_thread

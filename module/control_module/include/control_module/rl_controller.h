@@ -11,7 +11,6 @@
 #include <thread>
 #include <vector>
 
-#include "aimrt_module_cpp_interface/executor/executor.h"
 #include "control_module/controller_base.h"
 #include "control_module/data_file_logger.h"
 #include "control_module/rotation_tools.h"
@@ -21,7 +20,7 @@ namespace xyber_x1_infer::rl_control_module {
 class RLController : public ControllerBase {
  public:
   explicit RLController(bool use_sim_handles);
-  ~RLController() override = default;
+  ~RLController() override;
 
   void Init(const YAML::Node& cfg_node) override;
   void RestartController() override;
@@ -29,8 +28,7 @@ class RLController : public ControllerBase {
   void Update() override;
   my_ros2_proto::msg::JointCommand GetJointCmdData() override;
 
-  void SetWalkLegEntered(bool entered);
-  void SetLogExecutor(aimrt::executor::ExecutorRef executor);
+  void SetLoggingActive(bool active);
   void StopLoggingWorker();
 
  private:
@@ -104,16 +102,15 @@ class RLController : public ControllerBase {
   int64_t loop_count_{0};
   std::vector<digital_lp_filter<double>> low_pass_filters_;
   std::atomic_bool is_first_frame_{true};
-  aimrt::executor::ExecutorRef log_executor_;
+  std::thread log_worker_thread_;
   std::atomic_bool log_worker_running_{false};
   std::atomic_bool log_worker_started_{false};
-  std::atomic_bool log_worker_stopped_{true};
 
   DataFileLogger diag_logger_;
   bool diag_logging_enabled_{false};
   bool diag_logging_triggered_{false};
   bool diag_pending_frame_{false};
-  std::atomic_bool diag_walk_entered_{false};
+  std::atomic_bool diag_logging_requested_{false};
   int diag_log_count_{0};
   int diag_log_max_count_{0};
   std::string diag_log_dir_;
@@ -123,7 +120,7 @@ class RLController : public ControllerBase {
   DataFileLogger tm_logger_;
   bool tm_logging_enabled_{false};
   bool tm_logging_triggered_{false};
-  std::atomic_bool tm_walk_entered_{false};
+  std::atomic_bool tm_logging_requested_{false};
   int tm_log_count_{0};
   int tm_log_max_count_{0};
   std::string tm_log_dir_;

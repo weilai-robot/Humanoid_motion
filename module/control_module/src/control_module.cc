@@ -1,4 +1,7 @@
 #include "control_module/control_module.h"
+
+#include <algorithm>
+
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "control_module/global.h"
 #include <std_msgs/msg/float32.hpp>
@@ -43,29 +46,7 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
               }
               AIMRT_INFO("Trigger event: [{}] state '{}' -> '{}'", trigger_topic, last_state_name_, now_state);
               
-              // 检测进入 walk_leg 模式（从非 walk_leg 状态切换到 walk_leg 状态）
-              if (now_state == "walk_leg" && last_state_name_ != "walk_leg") {
-                int rl_count = 0;
-                for (auto& [name, controller] : controller_map_) {
-                  auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
-                  if (rl_controller) {
-                    rl_controller->SetWalkLegEntered(true);
-                    rl_count++;
-                  }
-                }
-                AIMRT_INFO("[Diag Trigger] Entered walk_leg mode, notified {} controller(s), walk_diag and tm_obs_input logging will start", rl_count);
-              }
-
-              // 检测离开 walk_leg 模式（从 walk_leg 切换到其他状态），重置标志允许再次触发
-              if (last_state_name_ == "walk_leg" && now_state != "walk_leg") {
-                AIMRT_INFO("[Diag Trigger] Left walk_leg mode -> '{}', resetting walk_leg_entered flag", now_state);
-                for (auto& [name, controller] : controller_map_) {
-                  auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
-                  if (rl_controller) {
-                    rl_controller->SetWalkLegEntered(false);
-                  }
-                }
-              }
+              UpdateRlLoggingState(now_state);
               last_state_name_ = now_state;
             }
           });
@@ -76,9 +57,6 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       //   printf("name: %s\n", name.c_str());
       // }
 
-      log_executor_ = core_.GetExecutorManager().GetExecutor("rl_log_flush_thread");
-      AIMRT_CHECK_ERROR_THROW(log_executor_, "Can not get executor 'rl_log_flush_thread'.");
-
       // 解析控制器
       for (auto iter = cfg_node["controllers"].begin(); iter != cfg_node["controllers"].end(); iter++) {
         std::string controller_name = iter->first.as<std::string>();
@@ -86,8 +64,6 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
 
         if (controller_name.substr(0, 3) == "rl_") {
           controller_map_[controller_name] = std::make_shared<RLController>(use_sim_handles_);
-          auto rl_controller = std::dynamic_pointer_cast<RLController>(controller_map_[controller_name]);
-          rl_controller->SetLogExecutor(log_executor_);
         } else if (controller_name.substr(0, 3) == "pd_") {
           controller_map_[controller_name] = std::make_shared<PDController>(use_sim_handles_);
         } else {
@@ -100,6 +76,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         controller_map_[controller_name]->Init(iter->second);
 
       }
+
+      UpdateRlLoggingState(last_state_name_);
 
       // 设置 joint_xxx_index_map_ 的尺度
       for (const auto& joint : cfg_node["joint_list"]) {
@@ -170,6 +148,28 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
 
   AIMRT_INFO("Init succeeded.");
   return true;
+}
+
+void ControlModule::UpdateRlLoggingState(const std::string& state_name) {
+  const auto active_controller_names = state_machine_.GetCurrentControllerNames();
+  int active_rl_count = 0;
+
+  for (auto& [name, controller] : controller_map_) {
+    auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
+    if (!rl_controller) {
+      continue;
+    }
+
+    const bool active =
+        std::find(active_controller_names.begin(), active_controller_names.end(), name) !=
+        active_controller_names.end();
+    rl_controller->SetLoggingActive(active);
+    if (active) {
+      ++active_rl_count;
+    }
+  }
+
+  AIMRT_INFO("[Diag Trigger] State '{}': {} active RL controller(s)", state_name, active_rl_count);
 }
 
 bool ControlModule::Start() {

@@ -3,11 +3,13 @@
 namespace xyber_x1_infer::rl_control_module {
 
 DataFileLogger::~DataFileLogger() {
-  Close();
+  (void)Close();
 }
 
 bool DataFileLogger::Open(const std::string& path, bool binary, bool append_newline) {
-  Close();
+  (void)Close();
+
+  std::lock_guard<std::mutex> lock(mutex_);
 
   path_ = std::filesystem::path(path);
   binary_ = binary;
@@ -26,23 +28,32 @@ bool DataFileLogger::Open(const std::string& path, bool binary, bool append_newl
     mode |= std::ios::binary;
   }
 
+  stream_.clear();
   stream_.open(path_, mode);
-  return stream_.is_open();
+  return stream_.is_open() && stream_.good();
 }
 
-void DataFileLogger::Close() {
+bool DataFileLogger::Close() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (stream_.is_open()) {
-    stream_.flush();
-    stream_.close();
+  if (!stream_.is_open()) {
+    return true;
   }
+
+  stream_.flush();
+  bool success = stream_.good();
+  stream_.close();
+  success = success && !stream_.fail();
+  return success;
 }
 
-void DataFileLogger::Flush() const {
+bool DataFileLogger::Flush() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (stream_.is_open()) {
-    stream_.flush();
+  if (!stream_.is_open()) {
+    return false;
   }
+
+  stream_.flush();
+  return stream_.good();
 }
 
 bool DataFileLogger::IsOpen() const {
@@ -63,27 +74,32 @@ void DataFileLogger::Log(uint32_t lvl,
   (void)file_name;
   (void)function_name;
 
-  if (log_data == nullptr || log_data_size == 0) {
-    return;
+  (void)Write(log_data, log_data_size);
+}
+
+bool DataFileLogger::Write(const char* data, size_t size) const {
+  if (data == nullptr || size == 0) {
+    return false;
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
   if (!stream_.is_open()) {
-    return;
+    return false;
   }
 
-  stream_.write(log_data, static_cast<std::streamsize>(log_data_size));
+  stream_.write(data, static_cast<std::streamsize>(size));
   if (append_newline_) {
     stream_.put('\n');
   }
+  return stream_.good();
 }
 
-void DataFileLogger::WriteTextLine(std::string_view line) const {
-  Log(0, 0, 0, nullptr, nullptr, line.data(), line.size());
+bool DataFileLogger::WriteTextLine(std::string_view line) const {
+  return Write(line.data(), line.size());
 }
 
-void DataFileLogger::WriteRaw(const void* data, size_t size) const {
-  Log(0, 0, 0, nullptr, nullptr, static_cast<const char*>(data), size);
+bool DataFileLogger::WriteRaw(const void* data, size_t size) const {
+  return Write(static_cast<const char*>(data), size);
 }
 
 }  // namespace xyber_x1_infer::rl_control_module

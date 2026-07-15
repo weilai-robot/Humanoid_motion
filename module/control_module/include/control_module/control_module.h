@@ -28,11 +28,11 @@ class ControlModule : public aimrt::ModuleBase {
 
  private:
   bool MainLoop();
+  void UpdateRlLoggingState(const std::string& state_name);
 
  private:
   aimrt::CoreRef core_;
   aimrt::executor::ExecutorRef executor_;
-  aimrt::executor::ExecutorRef log_executor_;
 
   std::vector<aimrt::channel::SubscriberRef> subs_;
   aimrt::channel::PublisherRef joint_cmd_pub_;

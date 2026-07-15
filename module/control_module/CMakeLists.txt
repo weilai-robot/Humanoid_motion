@@ -39,6 +39,7 @@ target_link_directories(
 find_package(std_msgs)
 find_package(sensor_msgs)
 find_package(geometry_msgs)
+find_package(Threads REQUIRED)
 target_link_libraries(
   ${CUR_TARGET_NAME}
   PRIVATE yaml-cpp::yaml-cpp
@@ -61,6 +62,7 @@ target_link_libraries(
          geometry_msgs::geometry_msgs__rosidl_typesupport_cpp
          geometry_msgs::geometry_msgs__rosidl_typesupport_fastrtps_cpp
          geometry_msgs::geometry_msgs__rosidl_typesupport_introspection_cpp
+         Threads::Threads
          onnxruntime
          ruckig)
 

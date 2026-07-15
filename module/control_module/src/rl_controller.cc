@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <limits>
 #include <sstream>
+#include <string_view>
 
 #include "control_module/global.h"
 
@@ -37,6 +38,10 @@ std::string MakeTimestampString() {
 RLController::RLController(bool use_sim_handles)
     : ControllerBase(use_sim_handles),
       memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}
+
+RLController::~RLController() {
+  StopLoggingWorker();
+}
 
 void RLController::Init(const YAML::Node& cfg_node) {
   joint_names_ = cfg_node["joint_list"].as<std::vector<std::string>>();
@@ -142,6 +147,8 @@ void RLController::Init(const YAML::Node& cfg_node) {
   for (int i = 0; i < onnx_conf_.actions_size; ++i) {
     low_pass_filters_.emplace_back(lpf_conf_.wc, lpf_conf_.ts);
   }
+
+  StartLoggingWorker();
 }
 
 void RLController::RestartController() {
@@ -149,31 +156,35 @@ void RLController::RestartController() {
   diag_pending_frame_ = false;
 }
 
-void RLController::SetWalkLegEntered(bool entered) {
-  diag_walk_entered_.store(entered, std::memory_order_release);
-  tm_walk_entered_.store(entered, std::memory_order_release);
-}
-
-void RLController::SetLogExecutor(aimrt::executor::ExecutorRef executor) {
-  log_executor_ = executor;
-  StartLoggingWorker();
+void RLController::SetLoggingActive(bool active) {
+  diag_logging_requested_.store(active, std::memory_order_release);
+  tm_logging_requested_.store(active, std::memory_order_release);
 }
 
 void RLController::StopLoggingWorker() {
+  if (!log_worker_started_.exchange(false, std::memory_order_acq_rel)) {
+    return;
+  }
+
   log_worker_running_.store(false, std::memory_order_release);
-  while (!log_worker_stopped_.load(std::memory_order_acquire)) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (log_worker_thread_.joinable()) {
+    log_worker_thread_.join();
   }
 }
 
 void RLController::StartLoggingWorker() {
-  if (!log_executor_ || log_worker_started_.exchange(true, std::memory_order_acq_rel)) {
+  if (log_worker_started_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
 
-  log_worker_stopped_.store(false, std::memory_order_release);
   log_worker_running_.store(true, std::memory_order_release);
-  log_executor_.Execute([this]() { LoggingWorkerLoop(); });
+  try {
+    log_worker_thread_ = std::thread([this]() { LoggingWorkerLoop(); });
+  } catch (...) {
+    log_worker_running_.store(false, std::memory_order_release);
+    log_worker_started_.store(false, std::memory_order_release);
+    throw;
+  }
 }
 
 void RLController::LoggingWorkerLoop() {
@@ -194,8 +205,11 @@ void RLController::LoggingWorkerLoop() {
           std::chrono::nanoseconds(now_ns - last_enqueue_ns) >= kLogIdleTimeout) {
         FinalizeDiagLogging("idle_timeout");
       } else if (now - last_diag_flush >= kLogFlushInterval) {
-        diag_logger_.Flush();
-        last_diag_flush = now;
+        if (!diag_logger_.Flush()) {
+          FinalizeDiagLogging("flush_error");
+        } else {
+          last_diag_flush = now;
+        }
       }
     }
 
@@ -205,8 +219,11 @@ void RLController::LoggingWorkerLoop() {
           std::chrono::nanoseconds(now_ns - last_enqueue_ns) >= kLogIdleTimeout) {
         FinalizeTmLogging("idle_timeout");
       } else if (now - last_tm_flush >= kLogFlushInterval) {
-        tm_logger_.Flush();
-        last_tm_flush = now;
+        if (!tm_logger_.Flush()) {
+          FinalizeTmLogging("flush_error");
+        } else {
+          last_tm_flush = now;
+        }
       }
     }
 
@@ -217,7 +234,6 @@ void RLController::LoggingWorkerLoop() {
   DrainTmBuffer();
   FinalizeDiagLogging("worker_stop");
   FinalizeTmLogging("worker_stop");
-  log_worker_stopped_.store(true, std::memory_order_release);
 }
 
 void RLController::Update() {
@@ -515,14 +531,25 @@ void RLController::FinalizeDiagLogging(const char* reason) {
     return;
   }
 
-  diag_logger_.Flush();
-  diag_logger_.Close();
+  const bool flush_ok = diag_logger_.Flush();
+  const bool close_ok = diag_logger_.Close();
   diag_logging_triggered_ = false;
-  diag_walk_entered_.store(false, std::memory_order_release);
-  AIMRT_INFO("walk_diag logging finished, reason={}, frames={}, dropped={}",
-             reason,
-             diag_log_count_,
-             diag_dropped_count_.load(std::memory_order_relaxed));
+  diag_logging_requested_.store(false, std::memory_order_release);
+  const std::string_view reason_view(reason);
+  const bool io_error = reason_view == "write_error" || reason_view == "flush_error";
+  if (flush_ok && close_ok && !io_error) {
+    AIMRT_INFO("walk_diag logging finished, reason={}, frames={}, dropped={}",
+               reason,
+               diag_log_count_,
+               diag_dropped_count_.load(std::memory_order_relaxed));
+  } else {
+    AIMRT_ERROR("walk_diag logging incomplete, reason={}, frames={}, dropped={}, flush_ok={}, close_ok={}",
+                reason,
+                diag_log_count_,
+                diag_dropped_count_.load(std::memory_order_relaxed),
+                flush_ok,
+                close_ok);
+  }
 }
 
 void RLController::FinalizeTmLogging(const char* reason) {
@@ -530,14 +557,25 @@ void RLController::FinalizeTmLogging(const char* reason) {
     return;
   }
 
-  tm_logger_.Flush();
-  tm_logger_.Close();
+  const bool flush_ok = tm_logger_.Flush();
+  const bool close_ok = tm_logger_.Close();
   tm_logging_triggered_ = false;
-  tm_walk_entered_.store(false, std::memory_order_release);
-  AIMRT_INFO("tm_obs_input logging finished, reason={}, frames={}, dropped={}",
-             reason,
-             tm_log_count_,
-             tm_dropped_count_.load(std::memory_order_relaxed));
+  tm_logging_requested_.store(false, std::memory_order_release);
+  const std::string_view reason_view(reason);
+  const bool io_error = reason_view == "write_error" || reason_view == "flush_error";
+  if (flush_ok && close_ok && !io_error) {
+    AIMRT_INFO("tm_obs_input logging finished, reason={}, frames={}, dropped={}",
+               reason,
+               tm_log_count_,
+               tm_dropped_count_.load(std::memory_order_relaxed));
+  } else {
+    AIMRT_ERROR("tm_obs_input logging incomplete, reason={}, frames={}, dropped={}, flush_ok={}, close_ok={}",
+                reason,
+                tm_log_count_,
+                tm_dropped_count_.load(std::memory_order_relaxed),
+                flush_ok,
+                close_ok);
+  }
 }
 
 void RLController::DrainDiagBuffer() {
@@ -545,11 +583,12 @@ void RLController::DrainDiagBuffer() {
     const size_t read_idx = diag_read_idx_.load(std::memory_order_relaxed);
     const DiagFrame& frame = diag_ring_[read_idx];
 
-    const bool walk_entered = diag_walk_entered_.load(std::memory_order_acquire);
-    if (walk_entered && !diag_logging_triggered_) {
+    const bool logging_requested = diag_logging_requested_.load(std::memory_order_acquire);
+    if (logging_requested && !diag_logging_triggered_) {
       const std::string diag_path = diag_log_dir_ + "/walk_diag_" + MakeTimestampString() + ".csv";
       if (!diag_logger_.Open(diag_path, false, true)) {
         AIMRT_ERROR("Failed to open walk_diag log file: {}", diag_path);
+        diag_logging_requested_.store(false, std::memory_order_release);
       } else {
         std::ostringstream header;
         header << "timestamp_ns,phase_sin,phase_cos"
@@ -571,10 +610,16 @@ void RLController::DrainDiagBuffer() {
                << ",imu_quat_w,imu_quat_x,imu_quat_y,imu_quat_z"
                << ",imu_gyro_x,imu_gyro_y,imu_gyro_z"
                << ",imu_accel_x,imu_accel_y,imu_accel_z";
-        diag_logger_.WriteTextLine(header.str());
-        diag_logging_triggered_ = true;
-        diag_log_count_ = 0;
-        AIMRT_INFO("walk_diag logging triggered: {}", diag_path);
+        if (!diag_logger_.WriteTextLine(header.str())) {
+          const bool close_ok = diag_logger_.Close();
+          diag_logging_requested_.store(false, std::memory_order_release);
+          AIMRT_ERROR("Failed to write walk_diag header: {}, close_ok={}", diag_path, close_ok);
+        } else {
+          diag_logging_triggered_ = true;
+          diag_log_count_ = 0;
+          diag_dropped_count_.store(0, std::memory_order_relaxed);
+          AIMRT_INFO("walk_diag logging triggered: {}", diag_path);
+        }
       }
     }
 
@@ -616,10 +661,13 @@ void RLController::DrainDiagBuffer() {
           << "," << frame.imu_accel_x
           << "," << frame.imu_accel_y
           << "," << frame.imu_accel_z;
-      diag_logger_.WriteTextLine(row.str());
-      ++diag_log_count_;
+      if (!diag_logger_.WriteTextLine(row.str())) {
+        FinalizeDiagLogging("write_error");
+      } else {
+        ++diag_log_count_;
+      }
 
-      if (diag_log_count_ >= diag_log_max_count_) {
+      if (diag_logging_triggered_ && diag_log_count_ >= diag_log_max_count_) {
         FinalizeDiagLogging("frame_limit");
       }
     }
@@ -633,22 +681,27 @@ void RLController::DrainTmBuffer() {
     const size_t read_idx = tm_read_idx_.load(std::memory_order_relaxed);
     const TmFrame& frame = tm_ring_[read_idx];
 
-    const bool walk_entered = tm_walk_entered_.load(std::memory_order_acquire);
-    if (walk_entered && !tm_logging_triggered_) {
+    const bool logging_requested = tm_logging_requested_.load(std::memory_order_acquire);
+    if (logging_requested && !tm_logging_triggered_) {
       const std::string bin_path = tm_log_dir_ + "/tm_obs_input_" + MakeTimestampString() + ".bin";
       if (!tm_logger_.Open(bin_path, true, false)) {
         AIMRT_ERROR("Failed to open tm_obs_input log file: {}", bin_path);
+        tm_logging_requested_.store(false, std::memory_order_release);
       } else {
         tm_logging_triggered_ = true;
         tm_log_count_ = 0;
+        tm_dropped_count_.store(0, std::memory_order_relaxed);
         AIMRT_INFO("tm_obs_input logging triggered: {}", bin_path);
       }
     }
 
     if (tm_logging_triggered_ && tm_log_count_ < tm_log_max_count_) {
-      tm_logger_.WriteRaw(frame.observations.data(), frame.observations.size() * sizeof(float));
-      ++tm_log_count_;
-      if (tm_log_count_ >= tm_log_max_count_) {
+      if (!tm_logger_.WriteRaw(frame.observations.data(), frame.observations.size() * sizeof(float))) {
+        FinalizeTmLogging("write_error");
+      } else {
+        ++tm_log_count_;
+      }
+      if (tm_logging_triggered_ && tm_log_count_ >= tm_log_max_count_) {
         FinalizeTmLogging("frame_limit");
       }
     }
