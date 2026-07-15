@@ -60,5 +60,5 @@ aimrt:
         log_lvl: INFO
         cfg_file_path: ./cfg/control_module/rl_x1.yaml
       - name: DcuDriverModule
-        log_lvl: DEBUG
+        log_lvl: WARN
         cfg_file_path: ./cfg/dcu_driver_module/dcu_x1.yaml
