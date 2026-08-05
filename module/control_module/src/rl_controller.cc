@@ -274,8 +274,8 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
     pd_tau_des_raw_[ii] = std::numeric_limits<double>::quiet_NaN();
     pd_tau_des_lpf_[ii] = std::numeric_limits<double>::quiet_NaN();
 
-    pos_des = std::max(static_cast<scalar_t>(joint_conf_.pos_limit_lower(ii)),
-                       std::min(static_cast<scalar_t>(joint_conf_.pos_limit_upper(ii)), pos_des));
+    // pos_des = std::max(static_cast<scalar_t>(joint_conf_.pos_limit_lower(ii)),
+    //                   std::min(static_cast<scalar_t>(joint_conf_.pos_limit_upper(ii)), pos_des));
 
     if (lpf_conf_.paralle_list.find(joint_names_[ii]) == lpf_conf_.paralle_list.end()) {
       pd_is_parallel_[ii] = 0;
