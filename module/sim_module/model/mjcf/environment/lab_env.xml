@@ -3,7 +3,7 @@
     ============================================================
     200平实验室仿真环境  20m(X) × 10m(Y)  房间高 2.8m
     机器人宽约 0.45m
-    通道A (可通过): X=2 隔断, 中心 Y=-3.0, 宽 0.80m
+    通道A (可通过): X=2 隔断, 中心 Y=-3.0, 宽 1.00m
     通道B (不可通过): X=2 隔断, 中心 Y=+3.2, 宽 0.35m
     ============================================================
     坐标系: 房间中心 (0,0,0)
@@ -105,24 +105,24 @@
     <!-- ================================================================
          中央隔断墙  (沿 X=2, 全 Y 向, 高 2.6m)
          X=2 可保证机器人在原点生成时不与墙体碰撞
-         通道A (可通过,  宽 0.80m): 中心 Y=-3.00 → 缺口 Y: -3.40 ~ -2.60
+         通道A (可通过,  宽 1.00m): 中心 Y=-3.00 → 缺口 Y: -3.50 ~ -2.50
          通道B (不可通过,宽 0.35m): 中心 Y=+3.20 → 缺口 Y: +3.025 ~ +3.375
     ================================================================ -->
-    <!-- 段1: Y= -5.0 ~ -3.4  中心 Y=-4.20  half=0.80 -->
-    <geom name="par_s1" type="box" size="0.1 0.80 1.3"
-          pos="2 -4.20 1.3" material="wall" conaffinity="7"/>
-    <!-- 段2: Y= -2.6 ~ +3.025 中心 Y=+0.2125 half=2.8125 -->
-    <geom name="par_s2" type="box" size="0.1 2.8125 1.3"
-          pos="2 0.2125 1.3" material="wall" conaffinity="7"/>
+    <!-- 段1: Y= -5.0 ~ -3.5  中心 Y=-4.25  half=0.75 -->
+    <geom name="par_s1" type="box" size="0.1 0.75 1.3"
+          pos="2 -4.25 1.3" material="wall" conaffinity="7"/>
+    <!-- 段2: Y= -2.5 ~ +3.025 中心 Y=+0.2625 half=2.7625 -->
+    <geom name="par_s2" type="box" size="0.1 2.7625 1.3"
+          pos="2 0.2625 1.3" material="wall" conaffinity="7"/>
     <!-- 段3: Y=+3.375 ~ +5.0  中心 Y=+4.1875 half=0.8125 -->
     <geom name="par_s3" type="box" size="0.1 0.8125 1.3"
           pos="2 4.1875 1.3" material="wall" conaffinity="7"/>
 
     <!-- 通道A 两侧警示柱 (黄色标识) -->
     <geom name="marker_A1" type="cylinder" size="0.04 0.5"
-          pos="2 -3.42 0.5" material="warning" conaffinity="7"/>
+          pos="2 -3.52 0.5" material="warning" conaffinity="7"/>
     <geom name="marker_A2" type="cylinder" size="0.04 0.5"
-          pos="2 -2.58 0.5" material="warning" conaffinity="7"/>
+          pos="2 -2.48 0.5" material="warning" conaffinity="7"/>
     <!-- 通道B 两侧警示柱 -->
     <geom name="marker_B1" type="cylinder" size="0.04 0.5"
           pos="2 3.02 0.5"  material="warning" conaffinity="7"/>
@@ -269,7 +269,7 @@
     <geom name="cbox3" type="box" size="0.30 0.22 0.42" pos="-1.5 -2.8 0.42" material="carton" conaffinity="7"/>
     <!-- 东区 -->
     <geom name="cbox4" type="box" size="0.35 0.25 0.50" pos="3.5 -3.8 0.50" material="carton" conaffinity="7"/>
-    <geom name="cbox5" type="box" size="0.22 0.22 0.28" pos="2.8 -3.2 0.28" material="carton" conaffinity="7"/>
+    <geom name="cbox5" type="box" size="0.22 0.22 0.28" pos="2.8 -1.5 0.28" material="carton" conaffinity="7"/>
     <!-- 通道B 东侧 (进一步加强不可通行感) -->
     <geom name="cbox6" type="box" size="0.28 0.28 0.45" pos="3.2  3.5 0.45" material="carton" conaffinity="7"/>
 
@@ -327,7 +327,7 @@
 
     <!-- 动态障碍3: 模拟临时堆放纸箱  (通道A 东侧出口)
          位置: X=3.5, Y=-3.0 — 机器人穿过通道A后正面遇到           -->
-    <geom name="dyn_crate_geom" type="box" size="0.25 0.20 0.25"
+    <geom name="dyn_crate_geom" type="box" size="0.25 0.20 0.35"
           pos="3.5 -3.0 0.25"
           rgba="0.75 0.65 0.15 1"
           conaffinity="7" condim="3"/>
