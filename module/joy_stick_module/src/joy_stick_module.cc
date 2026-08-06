@@ -279,9 +279,10 @@ void JoyStickModule::MainLoop() {
         }
         rt_yaw_integral_ = 0.0;  // 重置积分项
         rt_walk_active_ = true;
+        rt_t0_ = std::chrono::steady_clock::now();
         AIMRT_INFO("[JoyStick] RT auto-walk STARTED, target_yaw={:.3f} rad", rt_yaw_target_);
       } else if (rt_walk_active_) {
-        // ── 关闭：发布零速度 ──
+        // ── 关闭：发布零速度 + 回 stand ──
         rt_walk_active_ = false;
         vel_msgs.linear.x = 0.0;
         vel_msgs.angular.z = 0.0;
@@ -290,13 +291,34 @@ void JoyStickModule::MainLoop() {
           if (tp.pub_limiter)
             aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
         }
-        AIMRT_INFO("[JoyStick] RT auto-walk STOPPED");
+        // 发 /stand_mode 回到站立
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/stand_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+        AIMRT_INFO("[JoyStick] RT auto-walk STOPPED, back to stand");
       }
     }
     prev_rt_pressed_ = rt_pressed;
 
     // ── RT 偏航闭环控制 ──
     if (rt_walk_active_ && !auto_walk_active_) {
+      double rt_t = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - rt_t0_).count();
+      constexpr double RT_MODE_RETRY = 1.0;  // walk_mode 重复发布时长 s
+      constexpr double RT_SETTLE = 1.0;      // 进入 walk_leg 后等待稳定 s
+
+      // 启动阶段：发 /walk_mode 切换到 walk_leg
+      if (rt_t < RT_MODE_RETRY) {
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/walk_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+      }
+
+      // 等待步态稳定期间不发速度
+      if (rt_t < RT_MODE_RETRY + RT_SETTLE) {
+        if (log_cnt % 20 == 0)
+          AIMRT_INFO("[JoyStick] RT walk starting... t={:.2f}s", rt_t);
+      } else {
       double yaw_current = 0.0;
       double gyro_z = 0.0;
       {
@@ -343,6 +365,7 @@ void JoyStickModule::MainLoop() {
       if (log_cnt % 20 == 0)
         AIMRT_INFO("[JoyStick] RT walk: yaw_err={:.3f} rad, cmd_wz={:.3f} rad/s",
                    yaw_err, cmd_angular_z);
+      }  // end else (after settle)
     }
 
     if (!auto_walk_active_ && !rt_walk_active_) {

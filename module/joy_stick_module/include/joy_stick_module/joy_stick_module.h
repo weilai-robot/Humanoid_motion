@@ -86,6 +86,7 @@ class JoyStickModule : public aimrt::ModuleBase {
   bool rt_walk_active_ = false;
   double rt_yaw_target_ = 0.0;
   double rt_yaw_integral_ = 0.0;       // 积分项累积
+  std::chrono::steady_clock::time_point rt_t0_;  // RT 启动时间
 
   // RT 行走参数（从配置读取）
   double rt_linear_x_ = 0.4;
