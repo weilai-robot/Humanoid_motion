@@ -7,11 +7,11 @@ sub_imu_topic: /imu/data
 rt_auto_walk:
   enabled: true
   linear_x: 0.4           # 前进速度 m/s
-  yaw_kp: 0.8             # 偏航 P 增益
-  yaw_ki: 0.3             # 偏航 I 增益（消除稳态误差）
-  yaw_kd: 0.2             # 偏航 D 增益（阻尼）
-  max_angular_z: 0.5      # 最大转弯角速度 rad/s 限幅
-  i_limit: 0.3            # 积分项限幅 rad/s（防饱和）
+  yaw_kp: 1.2             # 偏航 P 增益
+  yaw_ki: 0.5             # 偏航 I 增益（消除稳态误差）
+  yaw_kd: 0.3             # 偏航 D 增益（阻尼）
+  max_angular_z: 0.6      # 最大转弯角速度 rad/s 限幅
+  i_limit: 0.5            # 积分项限幅 rad/s（防饱和）
 
 float_pubs:
   - topic_name: /idle_mode
