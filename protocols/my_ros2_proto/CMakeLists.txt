@@ -24,6 +24,7 @@ rosidl_generate_interfaces(${CUR_TARGET_NAME}
   "msg/JointCommand.msg"
   "msg/JoyStickData.msg"
   "msg/JoyStickState.msg"
+  "msg/LimitWarn.msg"
   "srv/MyRosRpc.srv"
   DEPENDENCIES std_msgs)
 # cmake-format: on

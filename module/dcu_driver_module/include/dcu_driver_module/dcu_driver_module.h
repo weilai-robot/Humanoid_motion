@@ -55,11 +55,15 @@ class DcuDriverModule : public aimrt::ModuleBase {
   std::unordered_map<std::string, DataSpace> joint_data_space_;
   std::unordered_map<std::string, DataSpace> actuator_data_space_;
 
+  // 限位监测（只监测不干预）：档位配置（每轮 publish，无状态跟踪）
+  std::unordered_map<std::string, YAML::LimitWarnActuatorConfig> limit_warn_config_;
+
   aimrt::CoreRef core_;
   aimrt::channel::PublisherRef pub_imu_;
   aimrt::channel::PublisherRef pub_joint_state_;
   aimrt::channel::PublisherRef pub_actuator_cmd_;
   aimrt::channel::PublisherRef pub_actuator_state_;
+  aimrt::channel::PublisherRef pub_limit_warn_;
   aimrt::channel::SubscriberRef sub_joint_cmd_;
 
   YAML::EthercatConfig ecat_cfg_;

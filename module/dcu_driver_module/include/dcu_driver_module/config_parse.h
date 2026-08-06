@@ -84,4 +84,47 @@ struct convert<DcuNetworkConfig> {
   }
 };
 
+// 限位告警档位配置（只监测不干预）
+struct LimitWarnThreshold {
+  float threshold;  // 执行器空间阈值(rad)
+  int level;        // 告警级别，用户自定义
+};
+struct LimitWarnActuatorConfig {
+  std::string actuator;
+  std::vector<LimitWarnThreshold> upper;  // 上侧：pos_act >= threshold 触发
+  std::vector<LimitWarnThreshold> lower;  // 下侧：pos_act <= threshold 触发
+};
+using LimitWarnConfig = std::vector<LimitWarnActuatorConfig>;
+
+template <>
+struct convert<LimitWarnConfig> {
+  static bool decode(const Node& node, LimitWarnConfig& rhs) {
+    try {
+      for (auto& actr_node : node) {
+        LimitWarnActuatorConfig cfg;
+        cfg.actuator = actr_node["actuator"].as<std::string>();
+        auto parse_list = [](const Node& n, std::vector<LimitWarnThreshold>& out) {
+          if (!n.IsDefined())
+            throw YAML::Exception(YAML::Mark::null_mark(),
+                                 "upper/lower must be configured in pair for limit_warn");
+          for (auto& item : n) {
+            LimitWarnThreshold t;
+            t.threshold = item["threshold"].as<float>();
+            t.level = item["level"].as<int>();
+            out.push_back(t);
+          }
+        };
+        parse_list(actr_node["upper"], cfg.upper);
+        parse_list(actr_node["lower"], cfg.lower);
+        rhs.push_back(cfg);
+      }
+      return true;
+    } catch (const YAML::Exception& e) {
+      auto lgr = aimrt::common::util::SimpleLogger();
+      AIMRT_HL_ERROR(lgr, "Parse LimitWarnConfig failed, {}", e.what());
+      return false;
+    }
+  }
+};
+
 }  // namespace YAML

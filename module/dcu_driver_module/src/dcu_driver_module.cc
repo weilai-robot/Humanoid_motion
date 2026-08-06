@@ -4,6 +4,7 @@
 #include "dcu_driver_module/dcu_driver_module.h"
 
 #include <ctime>
+#include <filesystem>
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "my_ros2_proto/msg/joy_stick_data.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -35,6 +36,22 @@ bool DcuDriverModule::Initialize(aimrt::CoreRef core) {
     // Init Transmission
     InitTransmission(cfg_node);
 
+    // Load limit warn config (optional, skip if file not found)
+    {
+      std::filesystem::path cfg_path(file_path);
+      std::string lw_path = (cfg_path.parent_path() / "limit_warn_x1.yaml").string();
+      if (std::filesystem::exists(lw_path)) {
+        YAML::Node lw_node = YAML::LoadFile(lw_path);
+        auto lw_cfg = lw_node["limit_warn"].as<YAML::LimitWarnConfig>();
+        for (auto& a : lw_cfg) {
+          limit_warn_config_[a.actuator] = a;
+        }
+        AIMRT_INFO("Load limit_warn config: {} actuators, from {}", limit_warn_config_.size(), lw_path);
+      } else {
+        AIMRT_WARN("limit_warn_x1.yaml not found at {}, skip limit monitoring.", lw_path);
+      }
+    }
+
     // Prepare publisher
     pub_imu_ = core_.GetChannelHandle().GetPublisher("/imu/data");
     aimrt::channel::RegisterPublishType<sensor_msgs::msg::Imu>(pub_imu_);
@@ -47,6 +64,9 @@ bool DcuDriverModule::Initialize(aimrt::CoreRef core) {
 
     pub_actuator_state_ = core_.GetChannelHandle().GetPublisher("/actuator_states");
     aimrt::channel::RegisterPublishType<sensor_msgs::msg::JointState>(pub_actuator_state_);
+
+    pub_limit_warn_ = core_.GetChannelHandle().GetPublisher("/joint_limit_warn");
+    aimrt::channel::RegisterPublishType<my_ros2_proto::msg::LimitWarn>(pub_limit_warn_);
 
     // Initialize subscriber
     sub_joint_cmd_ = core_.GetChannelHandle().GetSubscriber("/joint_cmd");
@@ -365,6 +385,7 @@ void DcuDriverModule::PublishLoop() {
       pub_actuator_state_);
   aimrt::channel::PublisherProxy<my_ros2_proto::msg::JointCommand> pub_actuator_cmd(
       pub_actuator_cmd_);
+  aimrt::channel::PublisherProxy<my_ros2_proto::msg::LimitWarn> pub_limit_warn(pub_limit_warn_);
 
   sensor_msgs::msg::Imu imu_msg;
   sensor_msgs::msg::JointState js_msg;
@@ -408,6 +429,42 @@ void DcuDriverModule::PublishLoop() {
       data.state.velocity = xyber_ctrl_->GetVelocity(name);
       data.state.position = xyber_ctrl_->GetPosition(name);
     }
+
+    // 限位监测（只监测不干预）：每轮按 yaml 档位配置判 pos_act 落哪档，publish LimitWarn msg（1ms 频率，无需变化触发）
+    for (auto& [name, data] : actuator_data_space_) {
+      auto it = limit_warn_config_.find(name);
+      if (it == limit_warn_config_.end()) continue;
+      float pos_act = data.state.position;
+
+      int new_level = 0;
+      float lim_val = 0.0f;
+      uint8_t dir = 2;  // 0=min, 1=max, 2=none
+      // 因为有好几档，所以需要遍历
+      for (const auto& t : it->second.upper) {  // 上侧：pos_act >= threshold
+        if (pos_act >= t.threshold && t.level > new_level) {
+          new_level = t.level;
+          lim_val = t.threshold;
+          dir = 1;  // 覆盖小档位，仅显示最大档位的警告
+        }
+      }
+      for (const auto& t : it->second.lower) {  // 下侧：pos_act <= threshold
+        if (pos_act <= t.threshold && t.level > new_level) {
+          new_level = t.level;
+          lim_val = t.threshold;
+          dir = 0;
+        }
+      }
+
+      my_ros2_proto::msg::LimitWarn lw_msg;
+      lw_msg.header.stamp = stamp;
+      lw_msg.level = new_level;
+      lw_msg.joint_name = name;
+      lw_msg.pos_act = pos_act;
+      lw_msg.threshold = lim_val;
+      lw_msg.direction = dir;
+      pub_limit_warn.Publish(lw_msg);
+    }
+
     // transmission
     {
       std::lock_guard<std::mutex> lock(rw_mtx_);

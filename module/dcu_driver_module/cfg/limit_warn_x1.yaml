@@ -1,0 +1,111 @@
+# 限位告警档位配置（执行器空间，rad）
+#
+# 规则：
+# - 只监测不干预，超档位线就告警，每轮 publish /joint_limit_warn topic（无日志、无心跳）
+# - 档位数自由（demo 统一 3 档，后续想改档数改所有执行器即可，代码不强制）
+# - level 用户自定义，越接近物理限位越高（demo: level1=0.8×pos_limit, level2=0.9×, level3=pos_limit）
+# - upper=上侧(pos_act>=threshold 触发)，lower=下侧(pos_act<=threshold 触发)，因 lim_min/max 不对称分列
+# - 没列的执行器不告警
+# - threshold 写具体数值；demo 用 pos_limit×0.8/0.9/1.0 算好的值，后续换标定值改本文件即可，代码不动
+# - 注：min/max=0 的一侧物理限位在 0 位置，三档 threshold 重合为 0，实际只有 level3 生效（pos_act<=0 或 >=0 即触发）
+#
+# level3 threshold = 物理限位值，level1/2 = 其 0.8/0.9 倍（数值已直接写入各执行器档位，改值改本文件即可，代码不动）
+limit_warn:
+  # ========= 上半身 body DCU channel_1（左上肢）=========
+  - actuator: left_shoulder_pitch_actuator
+    upper: [{threshold: 1.2, level: 1}, {threshold: 1.35, level: 2}, {threshold: 1.5, level: 3}]
+    lower: [{threshold: -2.0, level: 1}, {threshold: -2.25, level: 2}, {threshold: -2.5, level: 3}]
+  - actuator: left_shoulder_roll_actuator
+    upper: [{threshold: 1.6, level: 1}, {threshold: 1.8, level: 2}, {threshold: 2.0, level: 3}]
+    lower: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # min=0
+  - actuator: left_shoulder_yaw_actuator
+    upper: [{threshold: 1.44, level: 1}, {threshold: 1.62, level: 2}, {threshold: 1.8, level: 3}]
+    lower: [{threshold: -1.44, level: 1}, {threshold: -1.62, level: 2}, {threshold: -1.8, level: 3}]
+  - actuator: left_elbow_pitch_actuator
+    upper: [{threshold: 1.6, level: 1}, {threshold: 1.8, level: 2}, {threshold: 2.0, level: 3}]
+    lower: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # min=0
+  - actuator: left_elbow_yaw_actuator
+    upper: [{threshold: 1.44, level: 1}, {threshold: 1.62, level: 2}, {threshold: 1.8, level: 3}]
+    lower: [{threshold: -1.44, level: 1}, {threshold: -1.62, level: 2}, {threshold: -1.8, level: 3}]
+  - actuator: left_wrist_front_actuator
+    upper: [{threshold: 0.32, level: 1}, {threshold: 0.36, level: 2}, {threshold: 0.4, level: 3}]
+    lower: [{threshold: -0.32, level: 1}, {threshold: -0.36, level: 2}, {threshold: -0.4, level: 3}]
+  - actuator: left_wrist_back_actuator
+    upper: [{threshold: 0.32, level: 1}, {threshold: 0.36, level: 2}, {threshold: 0.4, level: 3}]
+    lower: [{threshold: -0.32, level: 1}, {threshold: -0.36, level: 2}, {threshold: -0.4, level: 3}]
+
+  # ========= 上半身 body DCU channel_2（右上肢）=========
+  - actuator: right_shoulder_pitch_actuator
+    upper: [{threshold: 2.0, level: 1}, {threshold: 2.25, level: 2}, {threshold: 2.5, level: 3}]
+    lower: [{threshold: -1.2, level: 1}, {threshold: -1.35, level: 2}, {threshold: -1.5, level: 3}]
+  - actuator: right_shoulder_roll_actuator
+    upper: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # max=0
+    lower: [{threshold: -1.6, level: 1}, {threshold: -1.8, level: 2}, {threshold: -2.0, level: 3}]
+  - actuator: right_shoulder_yaw_actuator
+    upper: [{threshold: 1.44, level: 1}, {threshold: 1.62, level: 2}, {threshold: 1.8, level: 3}]
+    lower: [{threshold: -1.44, level: 1}, {threshold: -1.62, level: 2}, {threshold: -1.8, level: 3}]
+  - actuator: right_elbow_pitch_actuator
+    upper: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # max=0
+    lower: [{threshold: -1.6, level: 1}, {threshold: -1.8, level: 2}, {threshold: -2.0, level: 3}]
+  - actuator: right_elbow_yaw_actuator
+    upper: [{threshold: 1.44, level: 1}, {threshold: 1.62, level: 2}, {threshold: 1.8, level: 3}]
+    lower: [{threshold: -1.44, level: 1}, {threshold: -1.62, level: 2}, {threshold: -1.8, level: 3}]
+  - actuator: right_wrist_back_actuator
+    upper: [{threshold: 0.32, level: 1}, {threshold: 0.36, level: 2}, {threshold: 0.4, level: 3}]
+    lower: [{threshold: -0.32, level: 1}, {threshold: -0.36, level: 2}, {threshold: -0.4, level: 3}]
+  - actuator: right_wrist_front_actuator
+    upper: [{threshold: 0.32, level: 1}, {threshold: 0.36, level: 2}, {threshold: 0.4, level: 3}]
+    lower: [{threshold: -0.32, level: 1}, {threshold: -0.36, level: 2}, {threshold: -0.4, level: 3}]
+
+  # ========= 上半身 body DCU channel_3（腰部并联）=========
+  - actuator: lumbar_left_actuator
+    upper: [{threshold: 0.12, level: 1}, {threshold: 0.14, level: 2}, {threshold: 0.15, level: 3}]
+    lower: [{threshold: -0.36, level: 1}, {threshold: -0.41, level: 2}, {threshold: -0.45, level: 3}]
+  - actuator: lumbar_right_actuator
+    upper: [{threshold: 0.2, level: 1}, {threshold: 0.23, level: 2}, {threshold: 0.25, level: 3}]
+    lower: [{threshold: -0.2, level: 1}, {threshold: -0.23, level: 2}, {threshold: -0.25, level: 3}]
+
+  # ========= 下半身 hip DCU channel_1（左下肢）=========
+  - actuator: left_hip_pitch_actuator
+    upper: [{threshold: 0.8, level: 1}, {threshold: 0.9, level: 2}, {threshold: 1.0, level: 3}]
+    lower: [{threshold: -1.6, level: 1}, {threshold: -1.8, level: 2}, {threshold: -2.0, level: 3}]
+  - actuator: left_hip_roll_actuator
+    upper: [{threshold: 1.2, level: 1}, {threshold: 1.35, level: 2}, {threshold: 1.5, level: 3}]
+    lower: [{threshold: -0.16, level: 1}, {threshold: -0.18, level: 2}, {threshold: -0.2, level: 3}]
+  - actuator: left_hip_yaw_actuator
+    upper: [{threshold: 1.2, level: 1}, {threshold: 1.35, level: 2}, {threshold: 1.5, level: 3}]
+    lower: [{threshold: -1.2, level: 1}, {threshold: -1.35, level: 2}, {threshold: -1.5, level: 3}]
+  - actuator: left_knee_pitch_actuator
+    upper: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # max=0
+    lower: [{threshold: -1.6, level: 1}, {threshold: -1.8, level: 2}, {threshold: -2.0, level: 3}]
+  - actuator: left_ankle_right_actuator
+    upper: [{threshold: 0.51, level: 1}, {threshold: 0.58, level: 2}, {threshold: 0.64, level: 3}]
+    lower: [{threshold: -0.51, level: 1}, {threshold: -0.58, level: 2}, {threshold: -0.64, level: 3}]
+  - actuator: left_ankle_left_actuator
+    upper: [{threshold: 0.28, level: 1}, {threshold: 0.32, level: 2}, {threshold: 0.35, level: 3}]
+    lower: [{threshold: -0.33, level: 1}, {threshold: -0.37, level: 2}, {threshold: -0.41, level: 3}]
+
+  # ========= 下半身 hip DCU channel_2（右下肢）=========
+  - actuator: right_hip_pitch_actuator
+    upper: [{threshold: 1.6, level: 1}, {threshold: 1.8, level: 2}, {threshold: 2.0, level: 3}]
+    lower: [{threshold: -0.8, level: 1}, {threshold: -0.9, level: 2}, {threshold: -1.0, level: 3}]
+  - actuator: right_hip_roll_actuator
+    upper: [{threshold: 0.16, level: 1}, {threshold: 0.18, level: 2}, {threshold: 0.2, level: 3}]
+    lower: [{threshold: -1.2, level: 1}, {threshold: -1.35, level: 2}, {threshold: -1.5, level: 3}]
+  - actuator: right_hip_yaw_actuator
+    upper: [{threshold: 1.2, level: 1}, {threshold: 1.35, level: 2}, {threshold: 1.5, level: 3}]
+    lower: [{threshold: -1.2, level: 1}, {threshold: -1.35, level: 2}, {threshold: -1.5, level: 3}]
+  - actuator: right_knee_pitch_actuator
+    upper: [{threshold: 1.6, level: 1}, {threshold: 1.8, level: 2}, {threshold: 2.0, level: 3}]
+    lower: [{threshold: 0.0, level: 1}, {threshold: 0.0, level: 2}, {threshold: 0.0, level: 3}]  # min=0
+  - actuator: right_ankle_left_actuator
+    upper: [{threshold: 0.28, level: 1}, {threshold: 0.32, level: 2}, {threshold: 0.35, level: 3}]
+    lower: [{threshold: -0.33, level: 1}, {threshold: -0.37, level: 2}, {threshold: -0.41, level: 3}]
+  - actuator: right_ankle_right_actuator
+    upper: [{threshold: 0.51, level: 1}, {threshold: 0.58, level: 2}, {threshold: 0.64, level: 3}]
+    lower: [{threshold: -0.51, level: 1}, {threshold: -0.58, level: 2}, {threshold: -0.64, level: 3}]
+
+  # ========= 下半身 hip DCU channel_3（腰部偏航）=========
+  - actuator: lumbar_yaw_actuator
+    upper: [{threshold: 0.8, level: 1}, {threshold: 0.9, level: 2}, {threshold: 1.0, level: 3}]
+    lower: [{threshold: -0.8, level: 1}, {threshold: -0.9, level: 2}, {threshold: -1.0, level: 3}]
