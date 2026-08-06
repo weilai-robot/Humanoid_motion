@@ -71,11 +71,17 @@ class JoyStickModule : public aimrt::ModuleBase {
   bool walk_mode_active_ = false;
   std::vector<bool> prev_walk_buttons_;  // 用于上升沿检测
 
-  // LT 刹车减速（在 RT 或 walk_mode 行走时按 LT 减速到 0）
+  // LT 刹车减速（捕获当前速度，8秒内匀速刹停所有方向）
   bool prev_lt_pressed_ = false;
   bool lt_brake_active_ = false;
-  bool lt_brake_from_rt_ = false;       // 记录是从 RT 还是 walk_mode 触发
-  double lt_brake_vel_ = 0.0;           // 刹车过程中的当前速度
+  double lt_brake_init_vx_ = 0.0;        // 刹车起始时的线速度x
+  double lt_brake_init_vy_ = 0.0;        // 刹车起始时的线速度y
+  double lt_brake_init_wz_ = 0.0;        // 刹车起始时的角速度z
+  std::chrono::steady_clock::time_point lt_brake_t0_;  // 刹车起始时间
+  // 记录上一帧实际发布的速度（用于 LT 刹车时捕获当前速度）
+  double last_vel_x_ = 0.0;
+  double last_vel_y_ = 0.0;
+  double last_vel_wz_ = 0.0;
 
   // IMU 订阅（用于 RT 偏航闭环）
   std::shared_mutex imu_mutex_;
@@ -96,6 +102,7 @@ class JoyStickModule : public aimrt::ModuleBase {
   double rt_yaw_kd_ = 0.2;
   double rt_max_angular_z_ = 0.5;
   double rt_i_limit_ = 0.3;            // 积分项限幅 rad/s
+  double rt_linear_y_ = 0.0;           // 侧向补偿 m/s（正=右，负=左）
 };
 
 }  // namespace xyber_x1_infer::joy_stick_module

@@ -51,8 +51,9 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
         rt_yaw_kd_        = rt["yaw_kd"].as<double>();
         rt_max_angular_z_ = rt["max_angular_z"].as<double>();
         rt_i_limit_       = rt["i_limit"].as<double>();
-        AIMRT_INFO("RT auto-walk enabled: vx={}, Kp={}, Ki={}, Kd={}, max_wz={}, i_limit={}",
-                   rt_linear_x_, rt_yaw_kp_, rt_yaw_ki_, rt_yaw_kd_, rt_max_angular_z_, rt_i_limit_);
+        if (rt["linear_y"]) rt_linear_y_ = rt["linear_y"].as<double>();
+        AIMRT_INFO("RT auto-walk enabled: vx={}, vy={}, Kp={}, Ki={}, Kd={}, max_wz={}, i_limit={}",
+                   rt_linear_x_, rt_linear_y_, rt_yaw_kp_, rt_yaw_ki_, rt_yaw_kd_, rt_max_angular_z_, rt_i_limit_);
       }
 
       if (cfg_node["float_pubs"]) {
@@ -180,35 +181,35 @@ void JoyStickModule::MainLoop() {
       }
     }
 
-    // ── LT 刹车检测（在 RT 或 walk_mode 行走时按 LT 减速到 0）──
+    // ── LT 刹车检测（捕获当前速度，8秒内匀速刹停所有方向）──
     bool lt_pressed = false;
     if (joy_data.axis.size() > 2) {
       lt_pressed = joy_data.axis[2] < -0.5;  // LT 全按约 -1.0
     }
     if (lt_pressed && !prev_lt_pressed_ && !lt_brake_active_) {
-      if (rt_walk_active_) {
-        // 从 RT 行走刹车
+      if (rt_walk_active_ || walk_mode_active_) {
+        // 捕获当前速度（上一帧实际发布的值）
+        lt_brake_init_vx_ = last_vel_x_;
+        lt_brake_init_vy_ = last_vel_y_;
+        lt_brake_init_wz_ = last_vel_wz_;
         lt_brake_active_ = true;
-        lt_brake_from_rt_ = true;
-        lt_brake_vel_ = rt_linear_x_;
-        rt_walk_active_ = false;  // 停止 RT 闭环
-        AIMRT_INFO("[JoyStick] LT brake from RT, decelerating from {:.3f} m/s", lt_brake_vel_);
-      } else if (walk_mode_active_) {
-        // 从 walk_mode（摇杆/固定速度）刹车
-        lt_brake_active_ = true;
-        lt_brake_from_rt_ = false;
-        lt_brake_vel_ = 0.4;  // walk_mode 固定速度
-        AIMRT_INFO("[JoyStick] LT brake from walk_mode, decelerating from {:.3f} m/s", lt_brake_vel_);
+        lt_brake_t0_ = std::chrono::steady_clock::now();
+        if (rt_walk_active_) rt_walk_active_ = false;  // 停止 RT 闭环
+        if (walk_mode_active_) walk_mode_active_ = false;  // 停止 walk_mode
+        AIMRT_INFO("[JoyStick] LT brake STARTED, vx={:.3f} vy={:.3f} wz={:.3f}",
+                   lt_brake_init_vx_, lt_brake_init_vy_, lt_brake_init_wz_);
       }
     }
     prev_lt_pressed_ = lt_pressed;
 
-    // LT 刹车减速
+    // LT 刹车减速（8秒内从初始速度匀速减到 0）
     if (lt_brake_active_) {
-      constexpr double LT_BRAKE_RAMP = 0.1;  // 减速变化率 m/s²
-      lt_brake_vel_ -= LT_BRAKE_RAMP * (1.0 / freq_);
-      if (lt_brake_vel_ <= 0.0) {
-        lt_brake_vel_ = 0.0;
+      constexpr double LT_BRAKE_DURATION = 8.0;  // 刹车总时长 s
+      double elapsed = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - lt_brake_t0_).count();
+      double scale = 1.0 - elapsed / LT_BRAKE_DURATION;  // 1.0 → 0.0
+      if (scale <= 0.0) {
+        scale = 0.0;
         lt_brake_active_ = false;
         // 回到 stand
         for (auto& fp : float_pubs_)
@@ -217,20 +218,27 @@ void JoyStickModule::MainLoop() {
         AIMRT_INFO("[JoyStick] LT brake COMPLETE, back to stand");
       }
 
-      // 发布减速速度
-      vel_msgs.linear.x = lt_brake_vel_;
-      vel_msgs.linear.y = 0.0;
-      vel_msgs.linear.z = 0.0;
+      // 发布减速速度（三个方向同时按比例衰减）
+      vel_msgs.linear.x  = lt_brake_init_vx_ * scale;
+      vel_msgs.linear.y  = lt_brake_init_vy_ * scale;
+      vel_msgs.linear.z  = 0.0;
       vel_msgs.angular.x = 0.0;
       vel_msgs.angular.y = 0.0;
-      vel_msgs.angular.z = 0.0;
+      vel_msgs.angular.z = lt_brake_init_wz_ * scale;
       for (auto& tp : twist_pubs_) {
         aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
         if (tp.pub_limiter)
           aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
       }
+
+      // 更新 last_vel 供下一帧使用
+      last_vel_x_ = vel_msgs.linear.x;
+      last_vel_y_ = vel_msgs.linear.y;
+      last_vel_wz_ = vel_msgs.angular.z;
+
       if (log_cnt % 20 == 0)
-        AIMRT_INFO("[JoyStick] LT brake: vx={:.3f} m/s", lt_brake_vel_);
+        AIMRT_INFO("[JoyStick] LT brake: t={:.1f}s scale={:.2f} vx={:.3f} wz={:.3f}",
+                   elapsed, scale, vel_msgs.linear.x, vel_msgs.angular.z);
     }
 
     // ── RT 直线行走检测（IMU 偏航闭环）──
@@ -289,11 +297,7 @@ void JoyStickModule::MainLoop() {
             aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
       }
 
-      // 等待步态稳定期间不发速度
-      if (rt_t < RT_MODE_RETRY + RT_SETTLE) {
-        if (log_cnt % 20 == 0)
-          AIMRT_INFO("[JoyStick] RT walk starting... t={:.2f}s", rt_t);
-      } else {
+      {
       double yaw_current = 0.0;
       double gyro_z = 0.0;
       {
@@ -325,17 +329,22 @@ void JoyStickModule::MainLoop() {
       cmd_angular_z = std::clamp(cmd_angular_z, -rt_max_angular_z_, rt_max_angular_z_);
 
       // 发布速度（和手柄完全相同的通道）
-      vel_msgs.linear.x = rt_linear_x_;
-      vel_msgs.linear.y = 0.0;
-      vel_msgs.linear.z = 0.0;
-      vel_msgs.angular.x = 0.0;
-      vel_msgs.angular.y = 0.0;
-      vel_msgs.angular.z = cmd_angular_z;
+      vel_msgs.linear.x  = rt_linear_x_;     // 前后速度（可参数化）
+      vel_msgs.linear.y  = rt_linear_y_;     // 左右平移（侧向补偿，正=右负=左）
+      vel_msgs.linear.z  = 0.0;              // 上下（必须为0，机器人不能飞/钻地）
+      vel_msgs.angular.x = 0.0;              // 绕X轴翻滚（必须为0，否则侧翻）
+      vel_msgs.angular.y = 0.0;              // 绕Y轴俯仰（必须为0，否则前滚翻）
+      vel_msgs.angular.z = cmd_angular_z;    // 偏航转弯（PID闭环输出）
       for (auto& tp : twist_pubs_) {
         aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
         if (tp.pub_limiter)
           aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
       }
+
+      // 更新 last_vel 供 LT 刹车捕获
+      last_vel_x_ = vel_msgs.linear.x;
+      last_vel_y_ = vel_msgs.linear.y;
+      last_vel_wz_ = vel_msgs.angular.z;
 
       if (log_cnt % 20 == 0)
         AIMRT_INFO("[JoyStick] RT walk: yaw_err={:.3f} rad, cmd_wz={:.3f} rad/s",
@@ -440,6 +449,12 @@ void JoyStickModule::MainLoop() {
           aimrt::channel::Publish<geometry_msgs::msg::Twist>(twist_pub.pub_limiter, vel_msgs);
         }
       }
+    }
+    // 更新 last_vel 供 LT 刹车捕获（摇杆/固定速度模式）
+    if (!lt_brake_active_ && !rt_walk_active_ && walk_mode_active_) {
+      last_vel_x_ = vel_msgs.linear.x;
+      last_vel_y_ = vel_msgs.linear.y;
+      last_vel_wz_ = vel_msgs.angular.z;
     }
     }  // end if (!lt_brake_active_ && !rt_walk_active_)
 
