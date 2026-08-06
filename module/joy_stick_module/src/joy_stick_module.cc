@@ -29,6 +29,32 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
       executor_ = core_.GetExecutorManager().GetExecutor("joy_stick_pub_thread");
       AIMRT_CHECK_ERROR_THROW(executor_, "Can not get executor 'joy_stick_pub_thread'.");
 
+      // 订阅 IMU 数据（用于 RT 偏航闭环）
+      if (cfg_node["sub_imu_topic"]) {
+        auto imu_topic = cfg_node["sub_imu_topic"].as<std::string>();
+        auto sub = core_.GetChannelHandle().GetSubscriber(imu_topic);
+        aimrt::channel::Subscribe<sensor_msgs::msg::Imu>(sub,
+          [this](const std::shared_ptr<const sensor_msgs::msg::Imu>& msg) {
+            std::unique_lock<std::shared_mutex> lock(imu_mutex_);
+            latest_imu_ = *msg;
+            imu_received_ = true;
+          });
+        AIMRT_INFO("Subscribed IMU topic: {}", imu_topic);
+      }
+
+      // 读取 RT 直线行走参数
+      if (cfg_node["rt_auto_walk"] && cfg_node["rt_auto_walk"]["enabled"]) {
+        auto rt = cfg_node["rt_auto_walk"];
+        rt_linear_x_      = rt["linear_x"].as<double>();
+        rt_yaw_kp_        = rt["yaw_kp"].as<double>();
+        rt_yaw_ki_        = rt["yaw_ki"].as<double>();
+        rt_yaw_kd_        = rt["yaw_kd"].as<double>();
+        rt_max_angular_z_ = rt["max_angular_z"].as<double>();
+        rt_i_limit_       = rt["i_limit"].as<double>();
+        AIMRT_INFO("RT auto-walk enabled: vx={}, Kp={}, Ki={}, Kd={}, max_wz={}, i_limit={}",
+                   rt_linear_x_, rt_yaw_kp_, rt_yaw_ki_, rt_yaw_kd_, rt_max_angular_z_, rt_i_limit_);
+      }
+
       if (cfg_node["float_pubs"]) {
         for (const auto& pub : cfg_node["float_pubs"]) {
           FloatPub publisher;
@@ -154,6 +180,172 @@ void JoyStickModule::MainLoop() {
       }
     }
 
+    // ── LT 自动行走检测（走内部通道，和手柄一样的发布路径）──
+    bool lt_pressed = false;
+    if (joy_data.axis.size() > 2) {
+      lt_pressed = joy_data.axis[2] < -0.5;  // LT 全按约 -1.0
+    }
+    if (lt_pressed && !prev_lt_pressed_ && !auto_walk_active_ && !rt_walk_active_) {
+      auto_walk_active_ = true;
+      auto_walk_t0_ = std::chrono::steady_clock::now();
+      AIMRT_INFO("[JoyStick] LT auto-walk ACTIVATED");
+    }
+    prev_lt_pressed_ = lt_pressed;
+
+    if (auto_walk_active_) {
+      double aw_t = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - auto_walk_t0_).count();
+      constexpr double AW_DELAY = 2.0;       // 进入 walk_leg 前的 stand 保持
+      constexpr double AW_VEL_MAX = 0.4;     // 最大线速度 m/s
+      constexpr double AW_VEL_RAMP = 0.1;   // 减速变化率 m/s²
+      constexpr double AW_HOLD = 3.0;        // 保持最大速度的时长 s
+      constexpr double AW_RETRY = 1.0;       // 模式话题重复发布时长 s
+      double aw_dec = AW_VEL_MAX / AW_VEL_RAMP;  // 减速所需时长
+      double aw_hold_end = AW_DELAY + AW_HOLD;
+      double aw_dec_end = aw_hold_end + aw_dec;
+
+      // 计算目标线速度（直接到最大速度，无加速段）
+      double aw_v = 0.0;
+      if (aw_t >= AW_DELAY && aw_t < aw_hold_end)
+        aw_v = AW_VEL_MAX;
+      else if (aw_t < aw_dec_end)
+        aw_v = AW_VEL_MAX - AW_VEL_RAMP * (aw_t - aw_hold_end);
+
+      // 开局发布 stand
+      if (aw_t < AW_RETRY) {
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/stand_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+      }
+      // 进入 walk_leg
+      if (aw_t >= AW_DELAY && aw_t < AW_DELAY + AW_RETRY) {
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/walk_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+      }
+
+      // 发布速度（和手柄完全一样的通道和方式）
+      vel_msgs.linear.x = aw_v;
+      vel_msgs.linear.y = 0.0;
+      vel_msgs.linear.z = 0.0;
+      vel_msgs.angular.x = 0.0;
+      vel_msgs.angular.y = 0.0;
+      vel_msgs.angular.z = 0.0;
+      for (auto& tp : twist_pubs_) {
+        aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+        if (tp.pub_limiter)
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+      }
+      if (log_cnt % 20 == 0)
+        AIMRT_INFO("[JoyStick] Auto-walk t={:.2f}s vx={:.3f}", aw_t, aw_v);
+
+      // 减速结束后回 stand
+      if (aw_t >= aw_dec_end && aw_t < aw_dec_end + AW_RETRY) {
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/stand_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+      }
+      // 时间线完成
+      if (aw_t >= aw_dec_end + AW_RETRY) {
+        vel_msgs.linear.x = 0.0;
+        for (auto& tp : twist_pubs_) {
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+          if (tp.pub_limiter)
+            aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+        }
+        auto_walk_active_ = false;
+        AIMRT_INFO("[JoyStick] Auto-walk COMPLETE, back to stand");
+      }
+    }
+
+    // ── RT 直线行走检测（IMU 偏航闭环）──
+    bool rt_pressed = false;
+    if (joy_data.axis.size() > 5) {
+      rt_pressed = joy_data.axis[5] < -0.5;  // RT 全按约 -1.0
+    }
+    // 上升沿触发：切换 RT 行走开/关
+    if (rt_pressed && !prev_rt_pressed_) {
+      if (!rt_walk_active_ && !auto_walk_active_ && imu_received_) {
+        // ── 开启：读取当前 yaw 作为目标航向 ──
+        {
+          std::shared_lock<std::shared_mutex> lock(imu_mutex_);
+          double qw = latest_imu_.orientation.w;
+          double qx = latest_imu_.orientation.x;
+          double qy = latest_imu_.orientation.y;
+          double qz = latest_imu_.orientation.z;
+          double siny_cosp = 2.0 * (qw * qz + qx * qy);
+          double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+          rt_yaw_target_ = std::atan2(siny_cosp, cosy_cosp);
+        }
+        rt_yaw_integral_ = 0.0;  // 重置积分项
+        rt_walk_active_ = true;
+        AIMRT_INFO("[JoyStick] RT auto-walk STARTED, target_yaw={:.3f} rad", rt_yaw_target_);
+      } else if (rt_walk_active_) {
+        // ── 关闭：发布零速度 ──
+        rt_walk_active_ = false;
+        vel_msgs.linear.x = 0.0;
+        vel_msgs.angular.z = 0.0;
+        for (auto& tp : twist_pubs_) {
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+          if (tp.pub_limiter)
+            aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+        }
+        AIMRT_INFO("[JoyStick] RT auto-walk STOPPED");
+      }
+    }
+    prev_rt_pressed_ = rt_pressed;
+
+    // ── RT 偏航闭环控制 ──
+    if (rt_walk_active_ && !auto_walk_active_) {
+      double yaw_current = 0.0;
+      double gyro_z = 0.0;
+      {
+        std::shared_lock<std::shared_mutex> lock(imu_mutex_);
+        if (imu_received_) {
+          double qw = latest_imu_.orientation.w;
+          double qx = latest_imu_.orientation.x;
+          double qy = latest_imu_.orientation.y;
+          double qz = latest_imu_.orientation.z;
+          double siny_cosp = 2.0 * (qw * qz + qx * qy);
+          double cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz);
+          yaw_current = std::atan2(siny_cosp, cosy_cosp);
+          gyro_z = latest_imu_.angular_velocity.z;
+        }
+      }
+
+      // 偏航误差（角度归一化到 [-π, π]）
+      double yaw_err = rt_yaw_target_ - yaw_current;
+      while (yaw_err > M_PI)  yaw_err -= 2.0 * M_PI;
+      while (yaw_err < -M_PI) yaw_err += 2.0 * M_PI;
+
+      // 积分项累积（带限幅防饱和）
+      double dt = 1.0 / freq_;
+      rt_yaw_integral_ += yaw_err * dt;
+      rt_yaw_integral_ = std::clamp(rt_yaw_integral_, -rt_i_limit_ / rt_yaw_ki_, rt_i_limit_ / rt_yaw_ki_);
+
+      // PID 控制：angular.z = Kp·err + Ki·∫err + Kd·(-gyro_z)
+      double cmd_angular_z = rt_yaw_kp_ * yaw_err + rt_yaw_ki_ * rt_yaw_integral_ + rt_yaw_kd_ * (-gyro_z);
+      cmd_angular_z = std::clamp(cmd_angular_z, -rt_max_angular_z_, rt_max_angular_z_);
+
+      // 发布速度（和手柄完全相同的通道）
+      vel_msgs.linear.x = rt_linear_x_;
+      vel_msgs.linear.y = 0.0;
+      vel_msgs.linear.z = 0.0;
+      vel_msgs.angular.x = 0.0;
+      vel_msgs.angular.y = 0.0;
+      vel_msgs.angular.z = cmd_angular_z;
+      for (auto& tp : twist_pubs_) {
+        aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+        if (tp.pub_limiter)
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+      }
+
+      if (log_cnt % 20 == 0)
+        AIMRT_INFO("[JoyStick] RT walk: yaw_err={:.3f} rad, cmd_wz={:.3f} rad/s",
+                   yaw_err, cmd_angular_z);
+    }
+
+    if (!auto_walk_active_ && !rt_walk_active_) {
     for (auto twist_pub : twist_pubs_) {
       // 行走模式激活时绕过按钮检查，直接发布；否则需按住对应按钮
       bool ret = walk_mode_active_;
@@ -251,6 +443,7 @@ void JoyStickModule::MainLoop() {
         }
       }
     }
+    }  // end if (!auto_walk_active_ && !rt_walk_active_)
 
     for (auto srv_client : srv_clients_) {
       bool ret = true;
