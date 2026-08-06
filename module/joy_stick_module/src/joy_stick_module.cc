@@ -180,52 +180,45 @@ void JoyStickModule::MainLoop() {
       }
     }
 
-    // ── LT 自动行走检测（走内部通道，和手柄一样的发布路径）──
+    // ── LT 刹车检测（在 RT 或 walk_mode 行走时按 LT 减速到 0）──
     bool lt_pressed = false;
     if (joy_data.axis.size() > 2) {
       lt_pressed = joy_data.axis[2] < -0.5;  // LT 全按约 -1.0
     }
-    if (lt_pressed && !prev_lt_pressed_ && !auto_walk_active_ && !rt_walk_active_) {
-      auto_walk_active_ = true;
-      auto_walk_t0_ = std::chrono::steady_clock::now();
-      AIMRT_INFO("[JoyStick] LT auto-walk ACTIVATED");
+    if (lt_pressed && !prev_lt_pressed_ && !lt_brake_active_) {
+      if (rt_walk_active_) {
+        // 从 RT 行走刹车
+        lt_brake_active_ = true;
+        lt_brake_from_rt_ = true;
+        lt_brake_vel_ = rt_linear_x_;
+        rt_walk_active_ = false;  // 停止 RT 闭环
+        AIMRT_INFO("[JoyStick] LT brake from RT, decelerating from {:.3f} m/s", lt_brake_vel_);
+      } else if (walk_mode_active_) {
+        // 从 walk_mode（摇杆/固定速度）刹车
+        lt_brake_active_ = true;
+        lt_brake_from_rt_ = false;
+        lt_brake_vel_ = 0.4;  // walk_mode 固定速度
+        AIMRT_INFO("[JoyStick] LT brake from walk_mode, decelerating from {:.3f} m/s", lt_brake_vel_);
+      }
     }
     prev_lt_pressed_ = lt_pressed;
 
-    if (auto_walk_active_) {
-      double aw_t = std::chrono::duration<double>(
-          std::chrono::steady_clock::now() - auto_walk_t0_).count();
-      constexpr double AW_DELAY = 2.0;       // 进入 walk_leg 前的 stand 保持
-      constexpr double AW_VEL_MAX = 0.4;     // 最大线速度 m/s
-      constexpr double AW_VEL_RAMP = 0.1;   // 减速变化率 m/s²
-      constexpr double AW_HOLD = 3.0;        // 保持最大速度的时长 s
-      constexpr double AW_RETRY = 1.0;       // 模式话题重复发布时长 s
-      double aw_dec = AW_VEL_MAX / AW_VEL_RAMP;  // 减速所需时长
-      double aw_hold_end = AW_DELAY + AW_HOLD;
-      double aw_dec_end = aw_hold_end + aw_dec;
-
-      // 计算目标线速度（直接到最大速度，无加速段）
-      double aw_v = 0.0;
-      if (aw_t >= AW_DELAY && aw_t < aw_hold_end)
-        aw_v = AW_VEL_MAX;
-      else if (aw_t < aw_dec_end)
-        aw_v = AW_VEL_MAX - AW_VEL_RAMP * (aw_t - aw_hold_end);
-
-      // 开局发布 stand
-      if (aw_t < AW_RETRY) {
+    // LT 刹车减速
+    if (lt_brake_active_) {
+      constexpr double LT_BRAKE_RAMP = 0.1;  // 减速变化率 m/s²
+      lt_brake_vel_ -= LT_BRAKE_RAMP * (1.0 / freq_);
+      if (lt_brake_vel_ <= 0.0) {
+        lt_brake_vel_ = 0.0;
+        lt_brake_active_ = false;
+        // 回到 stand
         for (auto& fp : float_pubs_)
           if (fp.topic_name == "/stand_mode")
             aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
-      }
-      // 进入 walk_leg
-      if (aw_t >= AW_DELAY && aw_t < AW_DELAY + AW_RETRY) {
-        for (auto& fp : float_pubs_)
-          if (fp.topic_name == "/walk_mode")
-            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+        AIMRT_INFO("[JoyStick] LT brake COMPLETE, back to stand");
       }
 
-      // 发布速度（和手柄完全一样的通道和方式）
-      vel_msgs.linear.x = aw_v;
+      // 发布减速速度
+      vel_msgs.linear.x = lt_brake_vel_;
       vel_msgs.linear.y = 0.0;
       vel_msgs.linear.z = 0.0;
       vel_msgs.angular.x = 0.0;
@@ -237,25 +230,7 @@ void JoyStickModule::MainLoop() {
           aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
       }
       if (log_cnt % 20 == 0)
-        AIMRT_INFO("[JoyStick] Auto-walk t={:.2f}s vx={:.3f}", aw_t, aw_v);
-
-      // 减速结束后回 stand
-      if (aw_t >= aw_dec_end && aw_t < aw_dec_end + AW_RETRY) {
-        for (auto& fp : float_pubs_)
-          if (fp.topic_name == "/stand_mode")
-            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
-      }
-      // 时间线完成
-      if (aw_t >= aw_dec_end + AW_RETRY) {
-        vel_msgs.linear.x = 0.0;
-        for (auto& tp : twist_pubs_) {
-          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
-          if (tp.pub_limiter)
-            aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
-        }
-        auto_walk_active_ = false;
-        AIMRT_INFO("[JoyStick] Auto-walk COMPLETE, back to stand");
-      }
+        AIMRT_INFO("[JoyStick] LT brake: vx={:.3f} m/s", lt_brake_vel_);
     }
 
     // ── RT 直线行走检测（IMU 偏航闭环）──
@@ -265,7 +240,7 @@ void JoyStickModule::MainLoop() {
     }
     // 上升沿触发：切换 RT 行走开/关
     if (rt_pressed && !prev_rt_pressed_) {
-      if (!rt_walk_active_ && !auto_walk_active_ && imu_received_) {
+      if (!rt_walk_active_ && !lt_brake_active_ && imu_received_) {
         // ── 开启：读取当前 yaw 作为目标航向 ──
         {
           std::shared_lock<std::shared_mutex> lock(imu_mutex_);
@@ -301,7 +276,7 @@ void JoyStickModule::MainLoop() {
     prev_rt_pressed_ = rt_pressed;
 
     // ── RT 偏航闭环控制 ──
-    if (rt_walk_active_ && !auto_walk_active_) {
+    if (rt_walk_active_ && !lt_brake_active_) {
       double rt_t = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - rt_t0_).count();
       constexpr double RT_MODE_RETRY = 1.0;  // walk_mode 重复发布时长 s
@@ -368,7 +343,7 @@ void JoyStickModule::MainLoop() {
       }  // end else (after settle)
     }
 
-    if (!auto_walk_active_ && !rt_walk_active_) {
+    if (!lt_brake_active_ && !rt_walk_active_) {
     for (auto twist_pub : twist_pubs_) {
       // 行走模式激活时绕过按钮检查，直接发布；否则需按住对应按钮
       bool ret = walk_mode_active_;
@@ -466,7 +441,7 @@ void JoyStickModule::MainLoop() {
         }
       }
     }
-    }  // end if (!auto_walk_active_ && !rt_walk_active_)
+    }  // end if (!lt_brake_active_ && !rt_walk_active_)
 
     for (auto srv_client : srv_clients_) {
       bool ret = true;

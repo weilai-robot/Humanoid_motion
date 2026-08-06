@@ -71,10 +71,11 @@ class JoyStickModule : public aimrt::ModuleBase {
   bool walk_mode_active_ = false;
   std::vector<bool> prev_walk_buttons_;  // 用于上升沿检测
 
-  // LT 自动行走状态机（走内部通道，和手柄一样的发布路径）
+  // LT 刹车减速（在 RT 或 walk_mode 行走时按 LT 减速到 0）
   bool prev_lt_pressed_ = false;
-  bool auto_walk_active_ = false;
-  std::chrono::steady_clock::time_point auto_walk_t0_;
+  bool lt_brake_active_ = false;
+  bool lt_brake_from_rt_ = false;       // 记录是从 RT 还是 walk_mode 触发
+  double lt_brake_vel_ = 0.0;           // 刹车过程中的当前速度
 
   // IMU 订阅（用于 RT 偏航闭环）
   std::shared_mutex imu_mutex_;
