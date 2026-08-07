@@ -204,7 +204,7 @@ void JoyStickModule::MainLoop() {
 
     // LT 刹车减速（8秒内从初始速度匀速减到 0）
     if (lt_brake_active_) {
-      constexpr double LT_BRAKE_DURATION = 5.0;  // 刹车总时长 s
+      constexpr double LT_BRAKE_DURATION = 6.0;  // 刹车总时长 s
       double elapsed = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - lt_brake_t0_).count();
       double scale = 1.0 - elapsed / LT_BRAKE_DURATION;  // 1.0 → 0.0
@@ -220,7 +220,7 @@ void JoyStickModule::MainLoop() {
 
       // 发布减速速度（仅衰减 linear.x，y/z 不输出避免偏航）
       vel_msgs.linear.x  = lt_brake_init_vx_ * scale;
-      vel_msgs.linear.y  = 0.0;              // 不输出侧向，直线减速
+      vel_msgs.linear.y  = lt_brake_init_vy_ * scale;              // 不输出侧向，直线减速
       vel_msgs.linear.z  = 0.0;
       vel_msgs.angular.x = 0.0;
       vel_msgs.angular.y = 0.0;

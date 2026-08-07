@@ -114,13 +114,13 @@ joint_offset:
   left_hip_yaw_joint: 0.0
   left_knee_pitch_joint: 0.0
   left_ankle_pitch_joint: 0.0
-  left_ankle_roll_joint: 0.0
+  left_ankle_roll_joint: -0.03
   right_hip_pitch_joint: 0.0
   right_hip_roll_joint: 0.0
   right_hip_yaw_joint: 0.0
   right_knee_pitch_joint: 0.0
   right_ankle_pitch_joint: 0.0
-  right_ankle_roll_joint: 0.04
+  right_ankle_roll_joint: 0.07
 # ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
 
 joint_limits:
