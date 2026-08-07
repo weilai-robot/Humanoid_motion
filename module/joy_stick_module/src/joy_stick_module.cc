@@ -218,13 +218,13 @@ void JoyStickModule::MainLoop() {
         AIMRT_INFO("[JoyStick] LT brake COMPLETE, back to stand");
       }
 
-      // 发布减速速度（三个方向同时按比例衰减）
+      // 发布减速速度（仅衰减 linear.x，y/z 不输出避免偏航）
       vel_msgs.linear.x  = lt_brake_init_vx_ * scale;
-      vel_msgs.linear.y  = lt_brake_init_vy_ * scale;
+      vel_msgs.linear.y  = 0.0;              // 不输出侧向，直线减速
       vel_msgs.linear.z  = 0.0;
       vel_msgs.angular.x = 0.0;
       vel_msgs.angular.y = 0.0;
-      vel_msgs.angular.z = lt_brake_init_wz_ * scale;
+      vel_msgs.angular.z = 0.0;              // 不输出转弯，避免刹车时持续转向
       for (auto& tp : twist_pubs_) {
         aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
         if (tp.pub_limiter)
