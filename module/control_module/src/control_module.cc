@@ -133,6 +133,36 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
             controller.second->SetJointStateData(temp_msg, joint_state_index_map_);
           }
         });
+
+      // 电机层指令/反馈（dcu_driver actuator_debug=true 时发布；用于 walk_diag 记录电机侧扭矩）
+      const std::string actuator_cmd_topic =
+          cfg_node["sub_actuator_cmd_name"]
+              ? cfg_node["sub_actuator_cmd_name"].as<std::string>()
+              : "/actuator_cmd";
+      const std::string actuator_state_topic =
+          cfg_node["sub_actuator_state_name"]
+              ? cfg_node["sub_actuator_state_name"].as<std::string>()
+              : "/actuator_states";
+
+      subs_.push_back(core_.GetChannelHandle().GetSubscriber(actuator_cmd_topic));
+      ret &= aimrt::channel::Subscribe<my_ros2_proto::msg::JointCommand>(
+          subs_.back(),
+          [this](const std::shared_ptr<const my_ros2_proto::msg::JointCommand>& msg) {
+            for (const auto& controller : controller_map_) {
+              controller.second->SetActuatorCmdData(*msg);
+            }
+          });
+
+      subs_.push_back(core_.GetChannelHandle().GetSubscriber(actuator_state_topic));
+      ret &= aimrt::channel::Subscribe<sensor_msgs::msg::JointState>(
+          subs_.back(),
+          [this](const std::shared_ptr<const sensor_msgs::msg::JointState>& msg) {
+            for (const auto& controller : controller_map_) {
+              controller.second->SetActuatorStateData(*msg);
+            }
+          });
+      AIMRT_INFO("Subscribed actuator topics: {} , {}", actuator_cmd_topic, actuator_state_topic);
+
       AIMRT_CHECK_ERROR_THROW(ret, "Subscribe failed.");
 
       // 控制器发布

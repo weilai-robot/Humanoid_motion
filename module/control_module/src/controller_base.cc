@@ -24,6 +24,18 @@ void ControllerBase::SetJointStateData(const sensor_msgs::msg::JointState joint_
   }
 }
 
+void ControllerBase::SetActuatorCmdData(const my_ros2_proto::msg::JointCommand actuator_cmd_data) {
+  std::lock_guard<std::shared_mutex> lock(actuator_state_mutex_);
+  actuator_names_ = actuator_cmd_data.name;
+  actuator_cmd_data_ = actuator_cmd_data;
+}
+
+void ControllerBase::SetActuatorStateData(const sensor_msgs::msg::JointState actuator_state_data) {
+  std::lock_guard<std::shared_mutex> lock(actuator_state_mutex_);
+  actuator_names_ = actuator_state_data.name;
+  actuator_state_data_ = actuator_state_data;
+}
+
 std::vector<std::string> ControllerBase::GetJointList() {
   return joint_names_;
 }

@@ -19,6 +19,17 @@ constexpr auto kLogWorkerPollInterval = std::chrono::milliseconds(1);
 constexpr auto kLogIdleTimeout = std::chrono::milliseconds(500);
 constexpr auto kLogFlushInterval = std::chrono::milliseconds(200);
 
+bool IsLegActuator(const std::string& name) {
+  return name.find("_hip_") != std::string::npos ||
+         name.find("_knee_") != std::string::npos ||
+         name.find("_ankle_") != std::string::npos;
+}
+
+// 踝并联电机：软件下发 effort；髋/膝串联：下发位置，目标力矩记 0
+bool IsParallelLegActuator(const std::string& name) {
+  return name.find("_ankle_") != std::string::npos;
+}
+
 std::string MakeTimestampString() {
   auto now = std::chrono::system_clock::now();
   auto time_t_now = std::chrono::system_clock::to_time_t(now);
@@ -504,6 +515,22 @@ bool RLController::EnqueueDiagFrame() {
   frame.imu_accel_y = propri_.imu_accel(1);
   frame.imu_accel_z = propri_.imu_accel(2);
 
+  {
+    std::shared_lock<std::shared_mutex> lock(actuator_state_mutex_);
+    frame.actuator_names = actuator_names_;
+    const size_t n = actuator_names_.size();
+    frame.actuator_cmd_effort.assign(n, std::numeric_limits<double>::quiet_NaN());
+    frame.actuator_state_effort.assign(n, std::numeric_limits<double>::quiet_NaN());
+    for (size_t ii = 0; ii < n; ++ii) {
+      if (ii < actuator_cmd_data_.effort.size()) {
+        frame.actuator_cmd_effort[ii] = actuator_cmd_data_.effort[ii];
+      }
+      if (ii < actuator_state_data_.effort.size()) {
+        frame.actuator_state_effort[ii] = actuator_state_data_.effort[ii];
+      }
+    }
+  }
+
   diag_last_enqueue_ns_.store(frame.timestamp_ns, std::memory_order_release);
   diag_write_idx_.store(next_idx, std::memory_order_release);
   return true;
@@ -535,6 +562,7 @@ void RLController::FinalizeDiagLogging(const char* reason) {
   const bool close_ok = diag_logger_.Close();
   diag_logging_triggered_ = false;
   diag_logging_requested_.store(false, std::memory_order_release);
+  diag_file_actuator_names_.clear();
   const std::string_view reason_view(reason);
   const bool io_error = reason_view == "write_error" || reason_view == "flush_error";
   if (flush_ok && close_ok && !io_error) {
@@ -610,15 +638,30 @@ void RLController::DrainDiagBuffer() {
                << ",imu_quat_w,imu_quat_x,imu_quat_y,imu_quat_z"
                << ",imu_gyro_x,imu_gyro_y,imu_gyro_z"
                << ",imu_accel_x,imu_accel_y,imu_accel_z";
+        {
+          std::shared_lock<std::shared_mutex> lock(actuator_state_mutex_);
+          diag_file_actuator_names_.clear();
+          for (const auto& name : actuator_names_) {
+            if (IsLegActuator(name)) {
+              diag_file_actuator_names_.push_back(name);
+            }
+          }
+        }
+        for (const auto& name : diag_file_actuator_names_) {
+          header << ",actuator_cmd_effort_" << name
+                 << ",actuator_state_effort_" << name;
+        }
         if (!diag_logger_.WriteTextLine(header.str())) {
           const bool close_ok = diag_logger_.Close();
           diag_logging_requested_.store(false, std::memory_order_release);
+          diag_file_actuator_names_.clear();
           AIMRT_ERROR("Failed to write walk_diag header: {}, close_ok={}", diag_path, close_ok);
         } else {
           diag_logging_triggered_ = true;
           diag_log_count_ = 0;
           diag_dropped_count_.store(0, std::memory_order_relaxed);
-          AIMRT_INFO("walk_diag logging triggered: {}", diag_path);
+          AIMRT_INFO("walk_diag logging triggered: {} ({} leg actuator torque cols)",
+                     diag_path, diag_file_actuator_names_.size());
         }
       }
     }
@@ -661,6 +704,24 @@ void RLController::DrainDiagBuffer() {
           << "," << frame.imu_accel_x
           << "," << frame.imu_accel_y
           << "," << frame.imu_accel_z;
+      for (const auto& name : diag_file_actuator_names_) {
+        double cmd_effort = 0.0;  // 串联默认 0
+        double state_effort = std::numeric_limits<double>::quiet_NaN();
+        for (size_t ai = 0; ai < frame.actuator_names.size(); ++ai) {
+          if (frame.actuator_names[ai] != name) {
+            continue;
+          }
+          // 仅并联踝电机保留真实 cmd effort；串联强制 0
+          if (IsParallelLegActuator(name) && ai < frame.actuator_cmd_effort.size()) {
+            cmd_effort = frame.actuator_cmd_effort[ai];
+          }
+          if (ai < frame.actuator_state_effort.size()) {
+            state_effort = frame.actuator_state_effort[ai];
+          }
+          break;
+        }
+        row << "," << cmd_effort << "," << state_effort;
+      }
       if (!diag_logger_.WriteTextLine(row.str())) {
         FinalizeDiagLogging("write_error");
       } else {

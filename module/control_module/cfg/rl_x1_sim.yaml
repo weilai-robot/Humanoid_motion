@@ -5,6 +5,8 @@ initial_state: stand
 sub_joy_vel_name: /cmd_vel_limiter      # controller 接收的运动指令
 sub_imu_data_name: /imu/data            # IMU数据
 sub_joint_state_name: /joint_states     # 关节数据
+sub_actuator_cmd_name: /actuator_cmd    # 电机层指令（需 dcu actuator_debug=true）
+sub_actuator_state_name: /actuator_states  # 电机层反馈
 pub_joint_cmd_name: /joint_cmd          # 关节控制指令
 
 # ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓ control_modes list ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓

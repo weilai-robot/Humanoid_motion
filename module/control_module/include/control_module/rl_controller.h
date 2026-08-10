@@ -114,6 +114,7 @@ class RLController : public ControllerBase {
   int diag_log_count_{0};
   int diag_log_max_count_{0};
   std::string diag_log_dir_;
+  std::vector<std::string> diag_file_actuator_names_;  // 开文件时冻结的电机列名
   std::atomic_size_t diag_dropped_count_{0};
   std::atomic<int64_t> diag_last_enqueue_ns_{0};
 
@@ -160,6 +161,10 @@ class RLController : public ControllerBase {
     std::vector<double> tau_des_raw;
     std::vector<double> tau_des_lpf;
     std::vector<int> is_parallel;
+    // 电机侧力矩（来自 /actuator_cmd、/actuator_states，需 dcu actuator_debug=true）
+    std::vector<std::string> actuator_names;
+    std::vector<double> actuator_cmd_effort;
+    std::vector<double> actuator_state_effort;
   };
 
   struct TmFrame {
