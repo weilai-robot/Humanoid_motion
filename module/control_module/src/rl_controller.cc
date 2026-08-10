@@ -115,7 +115,7 @@ void RLController::Init(const YAML::Node& cfg_node) {
 
   diag_log_dir_ = "test_logs/data_csv";
   std::filesystem::create_directories(diag_log_dir_);
-  diag_log_max_count_ = 10 * (1000 / walk_step_conf_.decimation);
+  diag_log_max_count_ = 20 * (1000 / walk_step_conf_.decimation);
   diag_logging_enabled_ = true;
   pd_pos_des_raw_.assign(onnx_conf_.actions_size, std::numeric_limits<double>::quiet_NaN());
   pd_pos_des_lpf_.assign(onnx_conf_.actions_size, std::numeric_limits<double>::quiet_NaN());
