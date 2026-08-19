@@ -56,6 +56,12 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
                    rt_linear_x_, rt_linear_y_, rt_yaw_kp_, rt_yaw_ki_, rt_yaw_kd_, rt_max_angular_z_, rt_i_limit_);
       }
 
+      // LT 刹车参数
+      if (cfg_node["lt_brake"] && cfg_node["lt_brake"]["duration"]) {
+        lt_brake_duration_ = cfg_node["lt_brake"]["duration"].as<double>();
+        AIMRT_INFO("LT brake: duration={}s", lt_brake_duration_);
+      }
+
       if (cfg_node["float_pubs"]) {
         for (const auto& pub : cfg_node["float_pubs"]) {
           FloatPub publisher;
@@ -204,10 +210,11 @@ void JoyStickModule::MainLoop() {
 
     // LT 刹车减速（8秒内从初始速度匀速减到 0）
     if (lt_brake_active_) {
-      constexpr double LT_BRAKE_DURATION = 6.0;  // 刹车总时长 s
+      const double LT_BRAKE_DURATION = lt_brake_duration_;
       double elapsed = std::chrono::duration<double>(
           std::chrono::steady_clock::now() - lt_brake_t0_).count();
-      double scale = 1.0 - elapsed / LT_BRAKE_DURATION;  // 1.0 → 0.0
+      double linear_t = elapsed / LT_BRAKE_DURATION;
+      double scale = (1.0 - linear_t) * (1.0 - linear_t);
       if (scale <= 0.0) {
         scale = 0.0;
         lt_brake_active_ = false;

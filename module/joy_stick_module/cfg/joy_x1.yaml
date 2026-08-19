@@ -14,6 +14,10 @@ rt_auto_walk:
   max_angular_z: 0.6      # 最大转弯角速度 rad/s 限幅
   i_limit: 0.5            # 积分项限幅 rad/s（防饱和）
 
+# LT 刹车参数（按 LT 键触发，凹函数减速）
+lt_brake:
+  duration: 8.0           # 刹车总时长 s
+
 float_pubs:
   - topic_name: /idle_mode
     buttons: [7]
