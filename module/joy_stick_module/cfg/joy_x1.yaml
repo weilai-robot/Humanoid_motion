@@ -56,8 +56,8 @@ twist_pubs:
     # 固定速度（可选）：设置后忽略摇杆轴，使用以下固定值行走
     # 单位：linear m/s，angular rad/s；删除或注释此段恢复摇杆控制
     # ⚠️ 使用 Nav2 导航时必须注释掉 constant_velocity，否则手柄会持续抢占 /cmd_vel_limiter
-    # constant_velocity:
-    #   linear-x: 0.4
-    #   linear-y: 0.0
-    #   angular-z: 0.0
+    constant_velocity:
+      linear-x: 0.4
+      linear-y: 0.0
+      angular-z: 0.0
 

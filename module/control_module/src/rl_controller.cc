@@ -79,6 +79,22 @@ void RLController::Init(const YAML::Node& cfg_node) {
   walk_step_conf_.cycle_time = cfg_node["walk_step_conf"]["cycle_time"].as<double>();
   walk_step_conf_.sw_mode = cfg_node["walk_step_conf"]["sw_mode"].as<bool>();
   walk_step_conf_.cmd_threshold = cfg_node["walk_step_conf"]["cmd_threshold"].as<double>();
+  {
+    const auto& ws = cfg_node["walk_step_conf"];
+    walk_step_conf_.adaptive_cycle = ws["adaptive_cycle"] ? ws["adaptive_cycle"].as<bool>() : false;
+    walk_step_conf_.cycle_time_min =
+        ws["cycle_time_min"] ? ws["cycle_time_min"].as<double>() : walk_step_conf_.cycle_time;
+    walk_step_conf_.cycle_time_max =
+        ws["cycle_time_max"] ? ws["cycle_time_max"].as<double>() : walk_step_conf_.cycle_time;
+    walk_step_conf_.cycle_speed_max = ws["cycle_speed_max"] ? ws["cycle_speed_max"].as<double>() : 0.6;
+    walk_step_conf_.ema_tau = ws["cycle_speed_ema_tau"] ? ws["cycle_speed_ema_tau"].as<double>() : 0.5;
+    AIMRT_CHECK_ERROR_THROW(walk_step_conf_.ema_tau > 0.0, "cycle_speed_ema_tau must be > 0.");
+    AIMRT_CHECK_ERROR_THROW(walk_step_conf_.cycle_speed_max > 0.0, "cycle_speed_max must be > 0.");
+    walk_step_conf_.cycle_time_min = std::min(walk_step_conf_.cycle_time_min, walk_step_conf_.cycle_time_max);
+    cur_cycle_time_ = walk_step_conf_.adaptive_cycle ? walk_step_conf_.cycle_time_min : walk_step_conf_.cycle_time;
+    // 推理周期 = decimation / 控制频率（本模块主循环按 1kHz 设计）
+    policy_dt_ = walk_step_conf_.decimation / 1000.0;
+  }
   obs_scales_.lin_vel = cfg_node["obs_scales"]["lin_vel"].as<double>();
   obs_scales_.ang_vel = cfg_node["obs_scales"]["ang_vel"].as<double>();
   obs_scales_.dof_pos = cfg_node["obs_scales"]["dof_pos"].as<double>();
@@ -147,6 +163,8 @@ void RLController::Init(const YAML::Node& cfg_node) {
 void RLController::RestartController() {
   is_first_frame_ = true;
   diag_pending_frame_ = false;
+  phase_step_count_ = 0;
+  smoothed_speed_ = 0.0;
 }
 
 void RLController::SetWalkLegEntered(bool entered) {
@@ -359,27 +377,67 @@ void RLController::ComputeObservation() {
   vector_t propri_obs(onnx_conf_.observations_size);
   {
     std::shared_lock<std::shared_mutex> lock(joy_mutex_);
-    double phase = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
-    if (walk_step_conf_.sw_mode) {
-      const double cmd_norm =
-          std::sqrt(Square(joy_data_.linear.x) + Square(joy_data_.linear.y) + Square(joy_data_.angular.z));
-      if (cmd_norm <= walk_step_conf_.cmd_threshold) {
-        phase = 0;
+    // 对齐训练侧 exp1.2（x1_dh_stand_env.py / sim2sim.py）：
+    // 平面指令限幅 -> EMA 平滑速度 -> 自适应周期 -> 步数累加相位（站立清零）
+    double cmd_x = joy_data_.linear.x;
+    double cmd_y = joy_data_.linear.y;
+    const double cmd_z = joy_data_.angular.z;
+
+    if (walk_step_conf_.adaptive_cycle) {
+      // 平面指令限幅到 cycle_speed_max（训练命令范围上界）
+      const double planar = std::sqrt(Square(cmd_x) + Square(cmd_y));
+      if (planar > walk_step_conf_.cycle_speed_max && planar > 0.0) {
+        const double scale = walk_step_conf_.cycle_speed_max / planar;
+        cmd_x *= scale;
+        cmd_y *= scale;
       }
     }
-    phase = phase / walk_step_conf_.cycle_time;
+
+    // 站立判定（训练 sw_switch：含 yaw 的指令范数）
+    const bool standing = walk_step_conf_.sw_mode &&
+        std::sqrt(Square(cmd_x) + Square(cmd_y) + Square(cmd_z)) <= walk_step_conf_.cmd_threshold;
+
+    double phase = 0.0;
+    if (walk_step_conf_.adaptive_cycle) {
+      // EMA 平滑平面速度（仅线速度，原地转向不改变步频）
+      const double target_speed = std::sqrt(Square(cmd_x) + Square(cmd_y));
+      const double alpha = std::min(1.0, policy_dt_ / walk_step_conf_.ema_tau);
+      smoothed_speed_ += alpha * (target_speed - smoothed_speed_);
+
+      // 周期随速度线性伸缩：0.35s(静止) ~ 0.7s(cycle_speed_max)
+      const double ratio = std::clamp(smoothed_speed_, 0.0, walk_step_conf_.cycle_speed_max) /
+                           walk_step_conf_.cycle_speed_max;
+      cur_cycle_time_ = walk_step_conf_.cycle_time_min +
+                        ratio * (walk_step_conf_.cycle_time_max - walk_step_conf_.cycle_time_min);
+
+      if (standing) {
+        phase_step_count_ = 0;
+      } else {
+        ++phase_step_count_;
+      }
+      phase = standing ? 0.0 : phase_step_count_ * policy_dt_ / cur_cycle_time_;
+    } else {
+      // 固定周期模式：相位改为累加器（修复墙钟相位跳变），站立清零
+      cur_cycle_time_ = walk_step_conf_.cycle_time;
+      if (standing) {
+        phase_step_count_ = 0;
+      } else {
+        ++phase_step_count_;
+      }
+      phase = standing ? 0.0 : phase_step_count_ * policy_dt_ / cur_cycle_time_;
+    }
 
     obs_phase_sin_ = std::sin(2 * M_PI * phase);
     obs_phase_cos_ = std::cos(2 * M_PI * phase);
-    obs_cmd_linear_x_ = joy_data_.linear.x;
-    obs_cmd_linear_y_ = joy_data_.linear.y;
-    obs_cmd_angular_z_ = joy_data_.angular.z;
+    obs_cmd_linear_x_ = cmd_x;
+    obs_cmd_linear_y_ = cmd_y;
+    obs_cmd_angular_z_ = cmd_z;
 
     propri_obs << obs_phase_sin_,
         obs_phase_cos_,
-        joy_data_.linear.x * obs_scales_.lin_vel,
-        joy_data_.linear.y * obs_scales_.lin_vel,
-        joy_data_.angular.z,
+        cmd_x * obs_scales_.lin_vel,
+        cmd_y * obs_scales_.lin_vel,
+        cmd_z,
         (propri_.joint_pos - joint_conf_.init_state) * obs_scales_.dof_pos,
         propri_.joint_vel * obs_scales_.dof_vel,
         last_actions_,
@@ -451,6 +509,8 @@ bool RLController::EnqueueDiagFrame() {
   frame.timestamp_ns = duration_cast<nanoseconds>(high_resolution_clock::now().time_since_epoch()).count();
   frame.phase_sin = obs_phase_sin_;
   frame.phase_cos = obs_phase_cos_;
+  frame.cycle_time = cur_cycle_time_;
+  frame.smoothed_speed = smoothed_speed_;
   frame.cmd_linear_x = obs_cmd_linear_x_;
   frame.cmd_linear_y = obs_cmd_linear_y_;
   frame.cmd_angular_z = obs_cmd_angular_z_;
@@ -552,7 +612,7 @@ void RLController::DrainDiagBuffer() {
         AIMRT_ERROR("Failed to open walk_diag log file: {}", diag_path);
       } else {
         std::ostringstream header;
-        header << "timestamp_ns,phase_sin,phase_cos"
+        header << "timestamp_ns,phase_sin,phase_cos,cycle_time,smoothed_speed"
                << ",cmd_linear_x,cmd_linear_y,cmd_angular_z"
                << ",base_euler_x,base_euler_y,base_euler_z"
                << ",base_ang_vel_x,base_ang_vel_y,base_ang_vel_z";
@@ -583,6 +643,8 @@ void RLController::DrainDiagBuffer() {
       row << frame.timestamp_ns
           << "," << frame.phase_sin
           << "," << frame.phase_cos
+          << "," << frame.cycle_time
+          << "," << frame.smoothed_speed
           << "," << frame.cmd_linear_x
           << "," << frame.cmd_linear_y
           << "," << frame.cmd_angular_z

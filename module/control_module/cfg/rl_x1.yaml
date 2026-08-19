@@ -333,9 +333,14 @@ controllers:
     walk_step_conf:
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      cycle_time: 0.7      # 步态周期
+      cycle_time: 0.7      # 步态周期（固定周期模式 / 自适应模式缺省值）
       sw_mode: True        # 原地步态是否接受周期波函数
       cmd_threshold: 0.05 
+      adaptive_cycle: True    # 自适应周期开关（对齐训练 exp1.2；False 时使用固定 cycle_time）
+      cycle_time_min: 0.35    # 静止/低速最短周期 [s]
+      cycle_time_max: 0.7     # cycle_speed_max 时的最长周期 [s]
+      cycle_speed_max: 0.6    # 平面指令速度上限 [m/s]
+      cycle_speed_ema_tau: 0.5  # 速度 EMA 时间常数 [s]
     obs_scales:
       lin_vel: 2.
       ang_vel: 1.

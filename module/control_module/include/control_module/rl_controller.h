@@ -51,9 +51,14 @@ class RLController : public ControllerBase {
   struct WalkStepConf {
     double action_scale;
     int decimation;
-    double cycle_time;
+    double cycle_time;         // 固定步态周期（旧模型/固定周期模式）
     bool sw_mode;
     double cmd_threshold;
+    bool adaptive_cycle{false};      // 自适应周期开关（对齐训练 exp1.2）
+    double cycle_time_min{0.35};     // 静止/低速最短周期 [s]
+    double cycle_time_max{0.7};      // cycle_speed_max 时的最长周期 [s]
+    double cycle_speed_max{0.6};     // 平面指令速度上限 [m/s]
+    double ema_tau{0.5};             // 速度 EMA 时间常数 [s]
   } walk_step_conf_;
 
   struct ObsScales {
@@ -134,6 +139,8 @@ class RLController : public ControllerBase {
     int64_t timestamp_ns{0};
     double phase_sin{0.0};
     double phase_cos{0.0};
+    double cycle_time{0.0};
+    double smoothed_speed{0.0};
     double cmd_linear_x{0.0};
     double cmd_linear_y{0.0};
     double cmd_angular_z{0.0};
@@ -184,6 +191,10 @@ class RLController : public ControllerBase {
 
   double obs_phase_sin_{0.0};
   double obs_phase_cos_{1.0};
+  double policy_dt_{0.0};          // 推理周期 = decimation / 控制频率 [s]
+  int64_t phase_step_count_{0};    // 相位累加步数（对齐训练 phase_length_buf）
+  double smoothed_speed_{0.0};     // EMA 平滑后的平面指令速度 [m/s]
+  double cur_cycle_time_{0.7};     // 当前生效的步态周期 [s]（日志用）
   double obs_cmd_linear_x_{0.0};
   double obs_cmd_linear_y_{0.0};
   double obs_cmd_angular_z_{0.0};
