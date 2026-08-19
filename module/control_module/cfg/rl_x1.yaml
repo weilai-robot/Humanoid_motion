@@ -348,7 +348,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_5999.onnx
+      policy_file: cfg/control_module/policy/rl_walk_leg_15.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66

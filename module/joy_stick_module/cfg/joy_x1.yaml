@@ -7,7 +7,7 @@ sub_imu_topic: /imu/data
 rt_auto_walk:
   enabled: true
   linear_x: 0.4           # 前进速度 m/s
-  linear_y: -0.1           # 侧向补偿 m/s（正=向右，负=向左，0=无补偿）
+  linear_y: -0.0           # 侧向补偿 m/s（正=向右，负=向左，0=无补偿）
   yaw_kp: 1.2             # 偏航 P 增益
   yaw_ki: 0.5             # 偏航 I 增益（消除稳态误差）
   yaw_kd: 0.3             # 偏航 D 增益（阻尼）
@@ -56,8 +56,8 @@ twist_pubs:
     # 固定速度（可选）：设置后忽略摇杆轴，使用以下固定值行走
     # 单位：linear m/s，angular rad/s；删除或注释此段恢复摇杆控制
     # ⚠️ 使用 Nav2 导航时必须注释掉 constant_velocity，否则手柄会持续抢占 /cmd_vel_limiter
-    constant_velocity:
-      linear-x: 0.4
-      linear-y: 0.0
-      angular-z: 0.0
+   # constant_velocity:
+   #   linear-x: 0.4
+   #   linear-y: 0.0
+   #   angular-z: 0.0
 
