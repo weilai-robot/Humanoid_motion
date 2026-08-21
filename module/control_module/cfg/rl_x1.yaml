@@ -335,9 +335,19 @@ controllers:
     walk_step_conf:
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      cycle_time: 0.7      # 步态周期
+      cycle_time: 0.5      # 步态周期
       sw_mode: True        # 原地步态是否接受周期波函数
-      cmd_threshold: 0.05 
+      cmd_threshold: 0.05
+    # yaw_hold：复刻 sim env（little_step_v4）指令注入——训练时 obs 的 cmd_wz 是
+    # env 内 P 控制器动态改写的值（clip(gain×wrap(anchor−yaw), ±clip)），policy 学的是
+    # "服从 obs 中的 wz"。部署侧必须重建同一闭环，否则真机 wz 恒 0，yaw 回到 v1 漂移(+2.8°/s)。
+    # 参数与训练 config 一致：gain 1.0 / clip 0.25 / 门控 0.15（|raw_wz|>门控=转向透传，
+    # ≤门控=锁航向；转向→回中边沿 anchor 重置为当前 IMU yaw，转完即新基准）
+    yaw_hold_conf:
+      enabled: true
+      gain: 1.0
+      clip: 0.25
+      gate: 0.15
     obs_scales:
       lin_vel: 2.
       ang_vel: 1.
@@ -345,7 +355,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_5999.onnx
+      policy_file: cfg/control_module/policy/rl_walk_leg_v4_9000.onnx  # little_step_v4_9000（yaw_hold gain1.0，cmd_y 预偏置由 joy yaml 注入）
       actions_size: 12
       observations_size: 47
       num_hist: 66

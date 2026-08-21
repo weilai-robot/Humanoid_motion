@@ -111,6 +111,17 @@ void RLController::Init(const YAML::Node& cfg_node) {
   auto paralle_list = cfg_node["lpf_conf"]["paralle_list"].as<std::vector<std::string>>();
   lpf_conf_.paralle_list = std::set<std::string>(paralle_list.begin(), paralle_list.end());
 
+  // yaw_hold（可选配置节，缺省关闭）：与 sim env little_step_v4 同参
+  if (cfg_node["yaw_hold_conf"]) {
+    yaw_hold_conf_.enabled = cfg_node["yaw_hold_conf"]["enabled"].as<bool>();
+    yaw_hold_conf_.gain = cfg_node["yaw_hold_conf"]["gain"].as<double>();
+    yaw_hold_conf_.clip = cfg_node["yaw_hold_conf"]["clip"].as<double>();
+    yaw_hold_conf_.gate = cfg_node["yaw_hold_conf"]["gate"].as<double>();
+    yaw_hold_anchor_init_ = false;  // 首帧以当时 IMU yaw 初始化锚点
+    AIMRT_INFO("yaw_hold enabled: gain={}, clip={}, gate={}",
+               yaw_hold_conf_.gain, yaw_hold_conf_.clip, yaw_hold_conf_.gate);
+  }
+
   LoadModel();
 
   diag_log_dir_ = "test_logs/data_csv";
@@ -165,6 +176,9 @@ void RLController::Init(const YAML::Node& cfg_node) {
 void RLController::RestartController() {
   is_first_frame_ = true;
   diag_pending_frame_ = false;
+  // yaw_hold：模式重启时锚点重新初始化（以重启时刻朝向为新基准，避免拽回旧航向）
+  yaw_hold_anchor_init_ = false;
+  yaw_hold_prev_turning_ = false;
 }
 
 void RLController::SetLoggingActive(bool active) {
@@ -386,10 +400,42 @@ void RLController::ComputeObservation() {
   vector_t propri_obs(onnx_conf_.observations_size);
   {
     std::shared_lock<std::shared_mutex> lock(joy_mutex_);
+
+    // yaw_hold：复刻 sim env 指令注入——|raw_wz|>gate 为转向透传；否则 wz 改写为
+    // clip(gain×wrap(anchor−yaw), ±clip)（P 控制锁航向），转向→回中边沿 recenter。
+    // 与 sim 一致：改写发生在 phase/stand 判据之前，站立判据用改写后的指令
+    //（站立时若 yaw 偏差注入 hold_wz，机器人继续踏步纠偏而非直接停拍）。
+    if (yaw_hold_conf_.enabled) {
+      const double raw_wz = joy_data_.angular.z;
+      const double yaw_now = propri_.base_euler_xyz(2);
+      if (!yaw_hold_anchor_init_) {
+        yaw_hold_anchor_ = yaw_now;
+        yaw_hold_anchor_init_ = true;
+      }
+      const bool turning = std::fabs(raw_wz) > yaw_hold_conf_.gate;
+      const bool recenter = (!turning) && yaw_hold_prev_turning_;
+      if (recenter) {
+        yaw_hold_anchor_ = yaw_now;  // 转完即新基准，无回拉
+      }
+      yaw_hold_prev_turning_ = turning;
+      if (!turning) {
+        double err = yaw_hold_anchor_ - yaw_now;
+        while (err > M_PI) err -= 2.0 * M_PI;
+        while (err < -M_PI) err += 2.0 * M_PI;
+        double hold_wz = yaw_hold_conf_.gain * err;
+        hold_wz = std::max(-yaw_hold_conf_.clip, std::min(yaw_hold_conf_.clip, hold_wz));
+        obs_cmd_angular_z_ = hold_wz;  // 进 obs 的是纠偏量，不是 raw
+      } else {
+        obs_cmd_angular_z_ = raw_wz;
+      }
+    } else {
+      obs_cmd_angular_z_ = joy_data_.angular.z;
+    }
+
     double phase = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
     if (walk_step_conf_.sw_mode) {
       const double cmd_norm =
-          std::sqrt(Square(joy_data_.linear.x) + Square(joy_data_.linear.y) + Square(joy_data_.angular.z));
+          std::sqrt(Square(joy_data_.linear.x) + Square(joy_data_.linear.y) + Square(obs_cmd_angular_z_));
       if (cmd_norm <= walk_step_conf_.cmd_threshold) {
         phase = 0;
       }
@@ -400,13 +446,12 @@ void RLController::ComputeObservation() {
     obs_phase_cos_ = std::cos(2 * M_PI * phase);
     obs_cmd_linear_x_ = joy_data_.linear.x;
     obs_cmd_linear_y_ = joy_data_.linear.y;
-    obs_cmd_angular_z_ = joy_data_.angular.z;
 
     propri_obs << obs_phase_sin_,
         obs_phase_cos_,
         joy_data_.linear.x * obs_scales_.lin_vel,
         joy_data_.linear.y * obs_scales_.lin_vel,
-        joy_data_.angular.z,
+        obs_cmd_angular_z_,
         (propri_.joint_pos - joint_conf_.init_state) * obs_scales_.dof_pos,
         propri_.joint_vel * obs_scales_.dof_vel,
         last_actions_,

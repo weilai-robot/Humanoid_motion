@@ -77,6 +77,17 @@ class RLController : public ControllerBase {
     std::set<std::string> paralle_list;
   } lpf_conf_;
 
+  // yaw_hold：复刻 sim env（little_step_v4）的 obs cmd_wz 动态改写闭环
+  struct YawHoldConf {
+    bool enabled{false};
+    double gain{1.0};
+    double clip{0.25};
+    double gate{0.15};
+  } yaw_hold_conf_;
+  double yaw_hold_anchor_{0.0};   // 锚定航向（rad，IMU yaw）
+  bool yaw_hold_prev_turning_{false};
+  bool yaw_hold_anchor_init_{false};
+
   std::unique_ptr<Ort::Session> session_ptr_;
   Ort::MemoryInfo memory_info_;
   std::vector<const char*> input_names_;
