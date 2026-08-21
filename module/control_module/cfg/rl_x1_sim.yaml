@@ -340,9 +340,9 @@ controllers:
       sw_mode: True        # 原地步态是否接受周期波函数
       cmd_threshold: 0.05 
       adaptive_cycle: True    # 自适应周期开关（对齐训练 exp1.2；False 时使用固定 cycle_time）
-      cycle_time_min: 0.35    # 静止/低速最短周期 [s]
-      cycle_time_max: 0.7     # cycle_speed_max 时的最长周期 [s]
-      cycle_speed_max: 0.6    # 平面指令速度上限 [m/s]
+      cycle_time_min: 0.5     # 静止/低速最短周期 [s]（对齐 model_high 训练值）
+      cycle_time_max: 0.8     # cycle_speed_max 时的最长周期 [s]
+      cycle_speed_max: 0.8    # 平面指令速度上限 [m/s]
       cycle_speed_ema_tau: 0.5  # 速度 EMA 时间常数 [s]
     obs_scales:
       lin_vel: 2.
@@ -351,6 +351,40 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
+      # ── 多阶段模型配置（配置 stages 后启用分速度段切换，忽略下面的单模型字段）──
+      switch_conf:
+        low_norm: 0.2        # 上切阈值：|x| 或 |y| 超过 → 切高速模型
+        low_norm_hyst: 0.18  # 下切阈值：|x| 和 |y| 均低于 → 切回低速模型（迟滞）
+        still_norm: 0.02     # 静止判定阈值（x/y/z 全部低于）
+        still_window_s: 1.5  # 静止观测窗口 [s]
+        still_ratio: 0.9     # 窗口内静止帧占比阈值（宽松计）
+        min_dwell_s: 1.0     # 两次切换最小间隔 [s]
+      stages:
+        # stage 0: 低速模型（model_low：固定周期 0.58s，sw_switch=False 零命令原地踏步不站立）
+        - name: low_speed
+          policy_file: cfg/control_module/policy/rl_walk_leg_stable_21.onnx   # TODO: model_low 导出后替换
+          actions_size: 12
+          observations_size: 47
+          num_hist: 66
+          observations_clip: 100.
+          actions_clip: 100.
+          sw_mode: False          # 对齐 model_low sw_switch=False：零命令相位连续推进（原地踏步）
+          cmd_limit_x: 0.2        # 对齐 model_low 训练命令范围 x∈[-0.2,0.2]
+          cmd_limit_y: 0.2        # y∈[-0.2,0.2]
+          cycle_time_min: 0.58    # 固定周期：min=max=0.58（model_low 训练终值）
+          cycle_time_max: 0.58
+          # phase_offset: 0.5     # 可选：若两模型迈脚语义相反（切换瞬间迈错脚），取消注释试 0.5
+        # stage 1: 高速模型（model_high：变周期 0.5~0.8s，sw_switch=True 可站立）
+        - name: high_speed
+          policy_file: cfg/control_module/policy/rl_walk_leg_110.onnx   # TODO: model_high 导出后替换
+          actions_size: 12
+          observations_size: 47
+          num_hist: 66
+          observations_clip: 100.
+          actions_clip: 100.
+          cycle_time_min: 0.5     # 对齐 model_high 自适应周期映射（覆盖全局 0.5/0.8）
+          cycle_time_max: 0.8
+      # ── 旧单模型字段（无 stages 时生效；有 stages 时被忽略）──
       policy_file: cfg/control_module/policy/rl_walk_leg_15.onnx
       actions_size: 12
       observations_size: 47

@@ -183,10 +183,13 @@ class X1DHStandCfg(LeggedRobotCfg):
         # push
         push_robots = True
         push_interval_s = 4 # every this second, push robot
-        update_step = 2000 * 24 # after this count, increase push_duration index
-        push_duration = [0, 0.05, 0.1, 0.15, 0.2, 0.25] # increase push duration during training
-        max_push_vel_xy = 0.2
-        max_push_ang_vel = 0.2
+        # exp1.10: 2000*24->1000*24 so the 5000-iter run walks the FULL push-duration
+        # curriculum (exp1.9 only reached index 2/6: long pushes 0.15~0.25s never seen).
+        # Last tier 0.30 added, amplitudes 0.2->0.25: robustness is this round's priority.
+        update_step = 1000 * 24 # after this count, increase push_duration index
+        push_duration = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.30] # increase push duration during training
+        max_push_vel_xy = 0.25
+        max_push_ang_vel = 0.25
 
         randomize_base_mass = True
         added_mass_range = [-3, 3] # base mass rand range, base mass is all fix link sum mass
@@ -302,7 +305,7 @@ class X1DHStandCfg(LeggedRobotCfg):
         sw_switch = True # use stand_com_threshold or not
 
         class ranges:
-            lin_vel_x = [-0.4, 0.6] # backward/forward limits [m/s]
+            lin_vel_x = [-0.4, 0.8] # backward/forward limits [m/s] exp1.8: 0.6->0.8 top speed
             lin_vel_y = [-0.4, 0.4]   # min max [m/s]
             ang_vel_yaw = [-0.6, 0.6]    # min max [rad/s]
             heading = [-3.14, 3.14]
@@ -316,14 +319,22 @@ class X1DHStandCfg(LeggedRobotCfg):
         foot_max_dist = 1.0
 
         # final_swing_joint_pos = final_swing_joint_delta_pos + default_pos
-        final_swing_joint_delta_pos = [0.25, 0.05, -0.11, 0.35, -0.16, 0.0, -0.25, -0.05, 0.11, 0.35, -0.16, 0.0]
+        # exp1.9: raise mid-swing clearance (knee 0.35->0.50, ankle -0.16->-0.10 dorsiflexion
+        # to stop toe-dip, hip 0.25->0.30 compensates stride loss). exp1.8 replay showed
+        # true mid-swing gap only ~1.6cm -> 84 mid-swing ground touches per foot @4kN.
+        # exp1.10: ankle -0.10->-0.05 (more dorsiflexion: ~+1cm true clearance AND near-flat
+        # touchdown to cut the toe-first stumble chain behind exp1.9's seg2 deep dip; knee
+        # kept at 0.50 to hold lift height), hip 0.30->0.35 (stride + lift arc compensation).
+        final_swing_joint_delta_pos = [0.35, 0.05, -0.11, 0.50, -0.05, 0.0, -0.35, 0.05, 0.11, 0.50, -0.05, 0.0]
         target_feet_height = 0.06  # exp1.5: 0.03->0.06 (exp1.4 lift only 5.3cm, band floor too low)
         target_feet_height_max = 0.12  # exp1.5: 0.06->0.12 (unclamp lift ceiling)
         feet_to_ankle_distance = 0.041
-        # Adaptive cycle: 0.35 s at standstill to 0.7 s at 0.6 m/s.
-        cycle_speed_max = 0.6  # [m/s], walking-speed upper bound
-        cycle_time_min = 0.35  # [s], low-speed lower bound
-        cycle_time_max = 0.7   # [s], maximum cycle at 0.6 m/s
+        # Adaptive cycle: 0.5 s at standstill to 0.8 s at 0.8 m/s. exp1.8: was 0.35~0.7 @ 0.6.
+        # Higher floor slows cadence everywhere (bigger strides at same speed -> more stable);
+        # deploy side rl_x1.yaml adaptive_cycle must be synced to 0.5~0.8 @ 0.8.
+        cycle_speed_max = 0.8  # [m/s], walking-speed upper bound
+        cycle_time_min = 0.5   # [s], low-speed lower bound
+        cycle_time_max = 0.8   # [s], maximum cycle at 0.8 m/s
         # if true negative total rewards are clipped at zero (avoids early termination problems)
         only_positive_rewards = True
         # tracking reward = exp(-error*sigma)
@@ -332,7 +343,10 @@ class X1DHStandCfg(LeggedRobotCfg):
         
         class scales:
             ref_joint_pos = 2.2
-            feet_clearance = 1.
+            # exp1.10: 1.0->1.5. Lift height is the protected metric this round (P50 target
+            # 3.2->>=3.5cm); heavier weight keeps clearance winning the reward trade-off
+            # after swing_contact is halved (-0.5->-0.3).
+            feet_clearance = 1.5
             feet_contact_number = 2.0
             # gait
             feet_air_time = 1.2
@@ -341,18 +355,26 @@ class X1DHStandCfg(LeggedRobotCfg):
             knee_distance = 0.2
             # contact
             feet_contact_forces = -0.01
+            # exp1.9: penalize ground contact during the SWING phase only (stance-mask gated);
+            # exp1.8's -0.01 undirected penalty could not stop 84 mid-swing touches/foot.
+            # exp1.10: -0.5->-0.3 (touchdowns cured to 10/6 per foot; halve the penalty to
+            # release the high-speed conservatism that dragged 0.8-seg tracking to 72%).
+            swing_contact = -0.3
+            # exp1.11: hard wall on base pitch (dead zone 0.12 rad, quadratic ramp).
+            # All exp-series falls share the chain: overspeed -> forward pitch -> face plant.
+            pitch_limit = -1.0
             # vel tracking
             tracking_lin_vel = 1.8
             tracking_ang_vel = 1.1
             vel_mismatch_exp = 0.5  # lin_z; ang x,y
-            low_speed = 0.5  # exp1.4: 0.2->0.5 to curb acceleration overshoot (exp1.3 fell at 1.43m/s)
+            low_speed = 0.7  # exp1.8: 0.5->0.7 (exp1.7 seg2 overshot to 0.727/fell; ramp curriculum re-loosened speed)
             track_vel_hard = 0.5  # exp1.3: rollback exp1.2's 1.0 (negative-value pit encouraged lazy standing)
             lateral_vel = 0.6  # exp1.3: rollback exp1.2's 0.4 (exp1.1-proven config that walks)
             # base pos
             default_joint_pos = 1.0
             orientation = 1.
             feet_rotation = 0.3
-            feet_yaw_align = 0.6  # exp1.6: 0.4->0.6 (low-speed toe-out 15deg was the turning actuator behind -26deg drift)
+            feet_yaw_align = 0.4  # exp1.7: rollback exp1.6's 0.6 (coupled with new yaw_align caused circling; 0.4 = exp1.5-proven)
             yaw_align = 0.5  # exp1.6: body-heading dead-zone reward (sigma 5deg), cures -1.01deg/s slow turn
             base_height = 0.2
             base_acc = 0.2

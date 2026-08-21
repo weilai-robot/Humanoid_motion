@@ -106,12 +106,109 @@ void RLController::Init(const YAML::Node& cfg_node) {
   onnx_conf_.num_hist = cfg_node["onnx_conf"]["num_hist"].as<int32_t>();
   onnx_conf_.observations_clip = cfg_node["onnx_conf"]["observations_clip"].as<double>();
   onnx_conf_.actions_clip = cfg_node["onnx_conf"]["actions_clip"].as<double>();
+
+  // 分速度段模型（可选）：配置 stages 后启用多模型切换，忽略单模型字段
+  const auto& stages_node = cfg_node["onnx_conf"]["stages"];
+  if (stages_node && stages_node.IsSequence() && stages_node.size() > 0) {
+    multi_stage_ = true;
+    const auto& sw = cfg_node["onnx_conf"]["switch_conf"];
+    if (sw) {
+      switch_conf_.low_norm = sw["low_norm"] ? sw["low_norm"].as<double>() : switch_conf_.low_norm;
+      switch_conf_.low_norm_hyst = sw["low_norm_hyst"] ? sw["low_norm_hyst"].as<double>() : switch_conf_.low_norm_hyst;
+      switch_conf_.still_norm = sw["still_norm"] ? sw["still_norm"].as<double>() : switch_conf_.still_norm;
+      switch_conf_.still_window_s = sw["still_window_s"] ? sw["still_window_s"].as<double>() : switch_conf_.still_window_s;
+      switch_conf_.still_ratio = sw["still_ratio"] ? sw["still_ratio"].as<double>() : switch_conf_.still_ratio;
+      switch_conf_.min_dwell_s = sw["min_dwell_s"] ? sw["min_dwell_s"].as<double>() : switch_conf_.min_dwell_s;
+    }
+    AIMRT_CHECK_ERROR_THROW(switch_conf_.low_norm > switch_conf_.low_norm_hyst,
+                            "switch_conf.low_norm({}) must be > low_norm_hyst({}).",
+                            switch_conf_.low_norm, switch_conf_.low_norm_hyst);
+    AIMRT_CHECK_ERROR_THROW(switch_conf_.still_window_s > 0.0, "still_window_s must be > 0.");
+    AIMRT_CHECK_ERROR_THROW(switch_conf_.still_ratio > 0.0 && switch_conf_.still_ratio <= 1.0,
+                            "still_ratio must be in (0, 1].");
+
+    for (const auto& st : stages_node) {
+      OnnxStage stage;
+      stage.name = st["name"].as<std::string>();
+      stage.policy_file = st["policy_file"].as<std::string>();
+      stage.actions_size = st["actions_size"].as<int32_t>();
+      stage.observations_size = st["observations_size"].as<int32_t>();
+      stage.num_hist = st["num_hist"].as<int32_t>();
+      stage.observations_clip = st["observations_clip"] ? st["observations_clip"].as<double>() : onnx_conf_.observations_clip;
+      stage.actions_clip = st["actions_clip"] ? st["actions_clip"].as<double>() : onnx_conf_.actions_clip;
+      // stage 覆盖 PD 增益（未配置则用全局）
+      if (st["stiffness"] && st["damping"]) {
+        stage.stiffness = Eigen::Map<vector_t>(st["stiffness"].as<std::vector<double>>().data(),
+                                               st["stiffness"].as<std::vector<double>>().size());
+        stage.damping = Eigen::Map<vector_t>(st["damping"].as<std::vector<double>>().data(),
+                                             st["damping"].as<std::vector<double>>().size());
+        AIMRT_CHECK_ERROR_THROW(stage.stiffness.size() == static_cast<Eigen::Index>(stage.actions_size) &&
+                                    stage.damping.size() == static_cast<Eigen::Index>(stage.actions_size),
+                                "stage '{}' stiffness/damping size mismatch with actions_size.", stage.name);
+        stage.has_pd = true;
+      }
+      // stage 覆盖自适应周期映射（未配置则用全局 walk_step_conf）
+      if (st["cycle_time_min"] && st["cycle_time_max"]) {
+        stage.cycle_time_min = st["cycle_time_min"].as<double>();
+        stage.cycle_time_max = st["cycle_time_max"].as<double>();
+        stage.cycle_time_min = std::min(stage.cycle_time_min, stage.cycle_time_max);
+        stage.has_cycle = true;
+      }
+      // stage 覆盖站立冻结开关（低速模型 sw_switch=False：零命令相位连续推进=原地踏步）
+      if (st["sw_mode"]) {
+        stage.sw_mode = st["sw_mode"].as<bool>();
+        stage.has_sw_mode = true;
+      }
+      // stage 命令限幅（观测用，对齐训练命令范围）
+      if (st["cmd_limit_x"] && st["cmd_limit_y"]) {
+        stage.cmd_limit_x = st["cmd_limit_x"].as<double>();
+        stage.cmd_limit_y = st["cmd_limit_y"].as<double>();
+        AIMRT_CHECK_ERROR_THROW(stage.cmd_limit_x > 0.0 && stage.cmd_limit_y > 0.0,
+                                "stage '{}' cmd_limit_x/y must be > 0.", stage.name);
+        stage.has_cmd_limit = true;
+      }
+      // 切换到该 stage 时的一次性相位偏移（0.5 = 半周期，纠正两模型迈脚语义差异）
+      if (st["phase_offset"]) {
+        stage.phase_offset = st["phase_offset"].as<double>();
+      }
+      stages_.push_back(std::move(stage));
+    }
+    AIMRT_CHECK_ERROR_THROW(stages_.size() >= 2, "onnx_conf.stages needs at least 2 stages.");
+    // 校验 stage 间观测布局同构（切换时共享观测历史的前提）
+    for (size_t ii = 1; ii < stages_.size(); ++ii) {
+      AIMRT_CHECK_ERROR_THROW(
+          stages_[ii].observations_size == stages_[0].observations_size &&
+              stages_[ii].num_hist == stages_[0].num_hist &&
+              stages_[ii].actions_size == stages_[0].actions_size,
+          "stage '{}' obs layout differs from '{}': multi-stage requires identical "
+          "observations_size/num_hist/actions_size (PD/cycle may differ).",
+          stages_[ii].name, stages_[0].name);
+    }
+    // 静止窗口缓冲（推理拍 100Hz）
+    const size_t window_n = std::max<size_t>(
+        1, static_cast<size_t>(switch_conf_.still_window_s / policy_dt_ + 0.5));
+    still_window_.assign(window_n, false);
+    last_switch_time_ = high_resolution_clock::now() - std::chrono::duration_cast<nanoseconds>(
+                                                          std::chrono::duration<double>(switch_conf_.min_dwell_s));
+    AIMRT_INFO("RLController multi-stage enabled: {} stages, low_norm={}, hyst={}, still={}/{}s ratio={}, dwell={}s",
+               stages_.size(), switch_conf_.low_norm, switch_conf_.low_norm_hyst, switch_conf_.still_norm,
+               switch_conf_.still_window_s, switch_conf_.still_ratio, switch_conf_.min_dwell_s);
+  }
+
   lpf_conf_.wc = cfg_node["lpf_conf"]["wc"].as<double>();
   lpf_conf_.ts = cfg_node["lpf_conf"]["ts"].as<double>();
   auto paralle_list = cfg_node["lpf_conf"]["paralle_list"].as<std::vector<std::string>>();
   lpf_conf_.paralle_list = std::set<std::string>(paralle_list.begin(), paralle_list.end());
 
-  LoadModel();
+  if (multi_stage_) {
+    LoadStageModels();
+    // 观测缓冲按首个 stage 布局分配（已校验同构）
+    onnx_conf_.observations_size = stages_[0].observations_size;
+    onnx_conf_.num_hist = stages_[0].num_hist;
+    onnx_conf_.actions_size = stages_[0].actions_size;
+  } else {
+    LoadModel();
+  }
 
   diag_log_dir_ = "test_logs/data_csv";
   std::filesystem::create_directories(diag_log_dir_);
@@ -164,7 +261,14 @@ void RLController::RestartController() {
   is_first_frame_ = true;
   diag_pending_frame_ = false;
   phase_step_count_ = 0;
+  phase_accum_ = 0.0;
   smoothed_speed_ = 0.0;
+  if (multi_stage_) {
+    active_stage_idx_ = 0;  // 重启回低速模型
+    std::fill(still_window_.begin(), still_window_.end(), false);
+    still_window_idx_ = 0;
+    still_window_filled_ = false;
+  }
 }
 
 void RLController::SetWalkLegEntered(bool entered) {
@@ -269,8 +373,11 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
   for (int ii = 0; ii < onnx_conf_.actions_size; ++ii) {
     const scalar_t pos_des_raw = actions_[ii] * walk_step_conf_.action_scale + joint_conf_.init_state(ii);
     scalar_t pos_des = pos_des_raw;
-    const double stiffness = joint_conf_.stiffness(ii);
-    const double damping = joint_conf_.damping(ii);
+    // PD 增益按 stage 覆盖（未配置则用全局）
+    const OnnxStage* stage = multi_stage_ ? &stages_[active_stage_idx_] : nullptr;
+    const double stiffness =
+        (stage && stage->has_pd) ? stage->stiffness(ii) : joint_conf_.stiffness(ii);
+    const double damping = (stage && stage->has_pd) ? stage->damping(ii) : joint_conf_.damping(ii);
     pd_pos_des_raw_[ii] = pos_des_raw;
     pd_pos_des_lpf_[ii] = std::numeric_limits<double>::quiet_NaN();
     pd_tau_des_raw_[ii] = std::numeric_limits<double>::quiet_NaN();
@@ -341,6 +448,89 @@ void RLController::LoadModel() {
   }
 }
 
+void RLController::LoadStageModels() {
+  // Env 必须比所有 Session 长寿：提升为静态，随进程存活
+  static Ort::Env onnx_env(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxMultiStage");
+
+  for (auto& stage : stages_) {
+    Ort::SessionOptions session_options;
+    session_options.SetInterOpNumThreads(1);
+    session_options.SetIntraOpNumThreads(1);
+    stage.session = std::make_unique<Ort::Session>(onnx_env, stage.policy_file.c_str(), session_options);
+
+    stage.input_names.clear();
+    stage.output_names.clear();
+    stage.input_shapes.clear();
+    stage.output_shapes.clear();
+
+    Ort::AllocatorWithDefaultOptions allocator;
+    for (size_t ii = 0; ii < stage.session->GetInputCount(); ++ii) {
+      char* temp = new char[std::strlen(stage.session->GetInputNameAllocated(ii, allocator).get()) + 1];
+      std::strcpy(temp, stage.session->GetInputNameAllocated(ii, allocator).get());
+      stage.input_names.push_back(temp);
+      stage.input_shapes.push_back(stage.session->GetInputTypeInfo(ii).GetTensorTypeAndShapeInfo().GetShape());
+    }
+    for (size_t ii = 0; ii < stage.session->GetOutputCount(); ++ii) {
+      char* temp = new char[std::strlen(stage.session->GetOutputNameAllocated(ii, allocator).get()) + 1];
+      std::strcpy(temp, stage.session->GetOutputNameAllocated(ii, allocator).get());
+      stage.output_names.push_back(temp);
+      stage.output_shapes.push_back(stage.session->GetOutputTypeInfo(ii).GetTensorTypeAndShapeInfo().GetShape());
+    }
+
+    stage.observations.assign(stage.observations_size * stage.num_hist, 0.0f);
+    AIMRT_INFO("Stage '{}' loaded: {} (obs {}x{} act {})", stage.name, stage.policy_file,
+               stage.observations_size, stage.num_hist, stage.actions_size);
+  }
+}
+
+void RLController::UpdateActiveStage(double cmd_x, double cmd_y, double cmd_z) {
+  const double ax = std::abs(cmd_x);
+  const double ay = std::abs(cmd_y);
+  const double az = std::abs(cmd_z);
+
+  // (1) 静止窗口更新（含 ωz；滑窗累计占比）
+  const bool still_now = (ax < switch_conf_.still_norm) && (ay < switch_conf_.still_norm) &&
+                         (az < switch_conf_.still_norm);
+  still_window_[still_window_idx_] = still_now;
+  still_window_idx_ = (still_window_idx_ + 1) % still_window_.size();
+  if (still_window_idx_ == 0) still_window_filled_ = true;
+  const size_t filled_n = still_window_filled_ ? still_window_.size() : still_window_idx_;
+  size_t still_cnt = 0;
+  for (size_t ii = 0; ii < filled_n; ++ii) still_cnt += still_window_[ii] ? 1 : 0;
+  const bool still_timeout =
+      filled_n > 0 && static_cast<double>(still_cnt) / filled_n >= switch_conf_.still_ratio;
+
+  // (2) 目标 stage 判定（优先级：静止超时 > 上切 > 下切保持）
+  const bool is_low = (active_stage_idx_ == 0);
+  size_t target = active_stage_idx_;
+  if (still_timeout) {
+    target = 1;  // 规则3：静止超时 → 高速模型（带 sw_mode 站立冻结，低速模型原地踏步不会站立）
+  } else if (is_low) {
+    if (ax > switch_conf_.low_norm || ay > switch_conf_.low_norm) {
+      target = 1;  // 规则1：上切
+    }
+  } else {
+    if (ax < switch_conf_.low_norm_hyst && ay < switch_conf_.low_norm_hyst) {
+      target = 0;  // 规则2：下切（迟滞）
+    }
+  }
+
+  // (3) 防抖：距上次切换不足 min_dwell_s 则不切
+  if (target != active_stage_idx_) {
+    const double since_switch = duration<double>(high_resolution_clock::now() - last_switch_time_).count();
+    if (since_switch >= switch_conf_.min_dwell_s) {
+      AIMRT_INFO("[RLStage] switch '{}' -> '{}' (cmd=({:.3f},{:.3f},{:.3f}), still={})",
+                 stages_[active_stage_idx_].name, stages_[target].name, cmd_x, cmd_y, cmd_z, still_timeout);
+      active_stage_idx_ = target;
+      last_switch_time_ = high_resolution_clock::now();
+      // 新 stage 配置了相位偏移则在下一观测帧生效（一次性）
+      if (stages_[target].phase_offset != 0.0) {
+        has_pending_phase_offset_ = true;
+      }
+    }
+  }
+}
+
 void RLController::UpdateStateEstimation() {
   {
     std::shared_lock<std::shared_mutex> lock(joint_state_mutex_);
@@ -378,10 +568,22 @@ void RLController::ComputeObservation() {
   {
     std::shared_lock<std::shared_mutex> lock(joy_mutex_);
     // 对齐训练侧 exp1.2（x1_dh_stand_env.py / sim2sim.py）：
-    // 平面指令限幅 -> EMA 平滑速度 -> 自适应周期 -> 步数累加相位（站立清零）
+    // 平面指令限幅 -> EMA 平滑速度 -> 自适应周期 -> 相位积分（站立清零）
     double cmd_x = joy_data_.linear.x;
     double cmd_y = joy_data_.linear.y;
     const double cmd_z = joy_data_.angular.z;
+
+    // 多 stage 模式：先更新活动 stage（判定用原始指令）
+    if (multi_stage_) {
+      UpdateActiveStage(joy_data_.linear.x, joy_data_.linear.y, joy_data_.angular.z);
+    }
+    const OnnxStage* stage = multi_stage_ ? &stages_[active_stage_idx_] : nullptr;
+
+    // stage 级命令限幅（观测用，对齐该 stage 训练命令范围；未配置不限幅）
+    if (stage && stage->has_cmd_limit) {
+      cmd_x = std::clamp(cmd_x, -stage->cmd_limit_x, stage->cmd_limit_x);
+      cmd_y = std::clamp(cmd_y, -stage->cmd_limit_y, stage->cmd_limit_y);
+    }
 
     if (walk_step_conf_.adaptive_cycle) {
       // 平面指令限幅到 cycle_speed_max（训练命令范围上界）
@@ -393,42 +595,58 @@ void RLController::ComputeObservation() {
       }
     }
 
+    // 站立冻结开关按 stage 覆盖（低速模型 sw_switch=False：零命令相位连续推进=原地踏步）
+    const bool sw_mode =
+        (stage && stage->has_sw_mode) ? stage->sw_mode : walk_step_conf_.sw_mode;
     // 站立判定（训练 sw_switch：含 yaw 的指令范数）
-    const bool standing = walk_step_conf_.sw_mode &&
+    const bool standing = sw_mode &&
         std::sqrt(Square(cmd_x) + Square(cmd_y) + Square(cmd_z)) <= walk_step_conf_.cmd_threshold;
 
-    double phase = 0.0;
+    // 自适应周期参数按 stage 覆盖（未配置则用全局）
+    const double cyc_min = (stage && stage->has_cycle) ? stage->cycle_time_min : walk_step_conf_.cycle_time_min;
+    const double cyc_max = (stage && stage->has_cycle) ? stage->cycle_time_max : walk_step_conf_.cycle_time_max;
+
     if (walk_step_conf_.adaptive_cycle) {
       // EMA 平滑平面速度（仅线速度，原地转向不改变步频）
       const double target_speed = std::sqrt(Square(cmd_x) + Square(cmd_y));
       const double alpha = std::min(1.0, policy_dt_ / walk_step_conf_.ema_tau);
       smoothed_speed_ += alpha * (target_speed - smoothed_speed_);
 
-      // 周期随速度线性伸缩：0.35s(静止) ~ 0.7s(cycle_speed_max)
+      // 周期随速度线性伸缩：cyc_min(静止) ~ cyc_max(cycle_speed_max)
       const double ratio = std::clamp(smoothed_speed_, 0.0, walk_step_conf_.cycle_speed_max) /
                            walk_step_conf_.cycle_speed_max;
-      cur_cycle_time_ = walk_step_conf_.cycle_time_min +
-                        ratio * (walk_step_conf_.cycle_time_max - walk_step_conf_.cycle_time_min);
+      cur_cycle_time_ = cyc_min + ratio * (cyc_max - cyc_min);
 
+      // 相位积分累加（cycle_time 时变/跨 stage 切换均连续）
       if (standing) {
+        phase_accum_ = 0.0;
         phase_step_count_ = 0;
       } else {
+        phase_accum_ += policy_dt_ / cur_cycle_time_;
         ++phase_step_count_;
       }
-      phase = standing ? 0.0 : phase_step_count_ * policy_dt_ / cur_cycle_time_;
     } else {
       // 固定周期模式：相位改为累加器（修复墙钟相位跳变），站立清零
-      cur_cycle_time_ = walk_step_conf_.cycle_time;
+      cur_cycle_time_ = (stage && stage->has_cycle) ? stage->cycle_time_max : walk_step_conf_.cycle_time;
       if (standing) {
+        phase_accum_ = 0.0;
         phase_step_count_ = 0;
       } else {
+        phase_accum_ += policy_dt_ / cur_cycle_time_;
         ++phase_step_count_;
       }
-      phase = standing ? 0.0 : phase_step_count_ * policy_dt_ / cur_cycle_time_;
     }
 
-    obs_phase_sin_ = std::sin(2 * M_PI * phase);
-    obs_phase_cos_ = std::cos(2 * M_PI * phase);
+    // 切换后一次性相位偏移（纠正两 stage 迈脚语义差异；0.5=半周期交换左右脚）
+    if (multi_stage_ && has_pending_phase_offset_) {
+      phase_accum_ += stages_[active_stage_idx_].phase_offset;
+      has_pending_phase_offset_ = false;
+      AIMRT_INFO("[RLStage] phase offset {} applied to '{}'", stages_[active_stage_idx_].phase_offset,
+                 stages_[active_stage_idx_].name);
+    }
+
+    obs_phase_sin_ = std::sin(2 * M_PI * phase_accum_);
+    obs_phase_cos_ = std::cos(2 * M_PI * phase_accum_);
     obs_cmd_linear_x_ = cmd_x;
     obs_cmd_linear_y_ = cmd_y;
     obs_cmd_angular_z_ = cmd_z;
@@ -469,17 +687,47 @@ void RLController::ComputeObservation() {
       propri_history_buffer_.tail(propri_history_buffer_.size() - onnx_conf_.observations_size);
   propri_history_buffer_.tail(onnx_conf_.observations_size) = propri_obs.cast<float>();
 
-  for (int ii = 0; ii < onnx_conf_.observations_size * onnx_conf_.num_hist; ++ii) {
-    observations_[ii] = static_cast<float>(propri_history_buffer_[ii]);
+  if (multi_stage_) {
+    // 各 stage 独立 clip 后写入各自观测缓冲（历史帧共享，clip 参数可不同）
+    OnnxStage& stage = stages_[active_stage_idx_];
+    for (int ii = 0; ii < onnx_conf_.observations_size * onnx_conf_.num_hist; ++ii) {
+      stage.observations[ii] = static_cast<float>(propri_history_buffer_[ii]);
+    }
+    const float obs_min = -stage.observations_clip;
+    const float obs_max = stage.observations_clip;
+    std::transform(stage.observations.begin(), stage.observations.end(), stage.observations.begin(),
+                   [obs_min, obs_max](float x) { return std::max(obs_min, std::min(obs_max, x)); });
+  } else {
+    for (int ii = 0; ii < onnx_conf_.observations_size * onnx_conf_.num_hist; ++ii) {
+      observations_[ii] = static_cast<float>(propri_history_buffer_[ii]);
+    }
+    const scalar_t obs_min = -onnx_conf_.observations_clip;
+    const scalar_t obs_max = onnx_conf_.observations_clip;
+    std::transform(observations_.begin(), observations_.end(), observations_.begin(),
+                   [obs_min, obs_max](scalar_t x) { return std::max(obs_min, std::min(obs_max, x)); });
   }
-
-  const scalar_t obs_min = -onnx_conf_.observations_clip;
-  const scalar_t obs_max = onnx_conf_.observations_clip;
-  std::transform(observations_.begin(), observations_.end(), observations_.begin(),
-                 [obs_min, obs_max](scalar_t x) { return std::max(obs_min, std::min(obs_max, x)); });
 }
 
 void RLController::ComputeActions() {
+  if (multi_stage_) {
+    OnnxStage& stage = stages_[active_stage_idx_];
+    std::vector<Ort::Value> input_tensor;
+    input_tensor.push_back(Ort::Value::CreateTensor<float>(
+        memory_info_, stage.observations.data(), stage.observations.size(), stage.input_shapes[0].data(),
+        stage.input_shapes[0].size()));
+    std::vector<Ort::Value> output_values =
+        stage.session->Run(Ort::RunOptions{}, stage.input_names.data(), input_tensor.data(), 1,
+                           stage.output_names.data(), 1);
+    for (int i = 0; i < stage.actions_size; ++i) {
+      actions_[i] = *(output_values[0].GetTensorMutableData<float>() + i);
+    }
+    const float action_min = -stage.actions_clip;
+    const float action_max = stage.actions_clip;
+    std::transform(actions_.begin(), actions_.end(), actions_.begin(),
+                   [action_min, action_max](float x) { return std::max(action_min, std::min(action_max, x)); });
+    return;
+  }
+
   std::vector<Ort::Value> input_tensor;
   input_tensor.push_back(Ort::Value::CreateTensor<float>(
       memory_info_, observations_.data(), observations_.size(), input_shapes_[0].data(), input_shapes_[0].size()));
@@ -511,6 +759,7 @@ bool RLController::EnqueueDiagFrame() {
   frame.phase_cos = obs_phase_cos_;
   frame.cycle_time = cur_cycle_time_;
   frame.smoothed_speed = smoothed_speed_;
+  frame.active_stage = multi_stage_ ? static_cast<int>(active_stage_idx_) : 0;
   frame.cmd_linear_x = obs_cmd_linear_x_;
   frame.cmd_linear_y = obs_cmd_linear_y_;
   frame.cmd_angular_z = obs_cmd_angular_z_;
@@ -612,7 +861,7 @@ void RLController::DrainDiagBuffer() {
         AIMRT_ERROR("Failed to open walk_diag log file: {}", diag_path);
       } else {
         std::ostringstream header;
-        header << "timestamp_ns,phase_sin,phase_cos,cycle_time,smoothed_speed"
+        header << "timestamp_ns,phase_sin,phase_cos,cycle_time,smoothed_speed,active_stage"
                << ",cmd_linear_x,cmd_linear_y,cmd_angular_z"
                << ",base_euler_x,base_euler_y,base_euler_z"
                << ",base_ang_vel_x,base_ang_vel_y,base_ang_vel_z";
@@ -645,6 +894,7 @@ void RLController::DrainDiagBuffer() {
           << "," << frame.phase_cos
           << "," << frame.cycle_time
           << "," << frame.smoothed_speed
+          << "," << frame.active_stage
           << "," << frame.cmd_linear_x
           << "," << frame.cmd_linear_y
           << "," << frame.cmd_angular_z

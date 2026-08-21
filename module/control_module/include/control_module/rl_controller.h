@@ -35,6 +35,8 @@ class RLController : public ControllerBase {
 
  private:
   void LoadModel();
+  void LoadStageModels();
+  void UpdateActiveStage(double cmd_x, double cmd_y, double cmd_z);
   void UpdateStateEstimation();
   void ComputeObservation();
   void ComputeActions();
@@ -77,6 +79,56 @@ class RLController : public ControllerBase {
     double observations_clip;
     double actions_clip;
   } onnx_conf_;
+
+  // 分速度段模型配置
+  struct SwitchConf {
+    double low_norm{0.2};       // 上切阈值：|x| 或 |y| 超过则切高速模型
+    double low_norm_hyst{0.18}; // 下切阈值：|x| 和 |y| 均低于则切回低速模型（迟滞）
+    double still_norm{0.02};    // 静止判定阈值（含 ωz）
+    double still_window_s{1.5}; // 静止观测窗口
+    double still_ratio{0.9};    // 窗口内静止帧占比阈值
+    double min_dwell_s{1.0};    // 两次切换最小间隔
+  } switch_conf_;
+
+  struct OnnxStage {
+    std::string name;
+    std::string policy_file;
+    int actions_size{0};
+    int observations_size{0};
+    int num_hist{0};
+    double observations_clip{100.0};
+    double actions_clip{100.0};
+    // stage 覆盖项（未配置时用全局值）
+    bool has_pd{false};
+    vector_t stiffness;
+    vector_t damping;
+    bool has_cycle{false};
+    double cycle_time_min{0.0};
+    double cycle_time_max{0.0};
+    bool has_sw_mode{false};
+    bool sw_mode{true};         // 低速模型(sw_switch=False)零命令时相位不冻结（原地踏步）
+    bool has_cmd_limit{false};
+    double cmd_limit_x{0.0};    // stage 命令限幅（观测用；对齐训练命令范围）
+    double cmd_limit_y{0.0};
+    double phase_offset{0.0};   // 切换到该 stage 时附加的相位偏移（半周期=0.5 可纠正迈脚语义）
+
+    // 运行时对象
+    std::unique_ptr<Ort::Session> session;
+    std::vector<const char*> input_names;
+    std::vector<const char*> output_names;
+    std::vector<std::vector<int64_t>> input_shapes;
+    std::vector<std::vector<int64_t>> output_shapes;
+    std::vector<float> observations;  // stage 独立观测缓冲
+  };
+  std::vector<OnnxStage> stages_;
+  bool multi_stage_{false};
+  size_t active_stage_idx_{0};
+  bool has_pending_phase_offset_{false};  // 切换生效后一次性附加 phase_offset
+  time_point<high_resolution_clock> last_switch_time_{};
+  // 静止窗口（环形布尔缓冲，推理拍更新）
+  std::vector<bool> still_window_;
+  size_t still_window_idx_{0};
+  bool still_window_filled_{false};
 
   struct LPFConf {
     double wc;
@@ -141,6 +193,7 @@ class RLController : public ControllerBase {
     double phase_cos{0.0};
     double cycle_time{0.0};
     double smoothed_speed{0.0};
+    int active_stage{0};
     double cmd_linear_x{0.0};
     double cmd_linear_y{0.0};
     double cmd_angular_z{0.0};
@@ -192,7 +245,8 @@ class RLController : public ControllerBase {
   double obs_phase_sin_{0.0};
   double obs_phase_cos_{1.0};
   double policy_dt_{0.0};          // 推理周期 = decimation / 控制频率 [s]
-  int64_t phase_step_count_{0};    // 相位累加步数（对齐训练 phase_length_buf）
+  double phase_accum_{0.0};        // 相位累加器（跨 stage 连续，步数计数器改为积分式）
+  int64_t phase_step_count_{0};    // 兼容保留（固定周期模式）
   double smoothed_speed_{0.0};     // EMA 平滑后的平面指令速度 [m/s]
   double cur_cycle_time_{0.7};     // 当前生效的步态周期 [s]（日志用）
   double obs_cmd_linear_x_{0.0};

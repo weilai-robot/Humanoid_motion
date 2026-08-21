@@ -1,11 +1,12 @@
-# Playback script to demonstrate the speed-adaptive gait cycle for X1.
+# Playback script to demonstrate the low-speed transition gait for X1
+# (±0.2 m/s walking + in-place stepping at zero command).
 # Based on play.py structure (headless-safe, no pygame/joystick dependency).
 # Features:
-#   - Stepped forward-speed commands (0.2 -> 0.4 -> 0.6 -> 0.4 -> 0.2 -> 0 m/s)
-#     so the adaptive gait cycle (0.35 s at standstill up to 0.7 s at 0.6 m/s)
-#     is directly visible in the video and measurable from the CSV.
-#   - Overlays on the recorded video: command/actual/average speed, per-foot
-#     contact state (ON/OFF + force), and the theoretical cycle time.
+#   - Stepped commands (0.2 -> 0 -> -0.2 -> 0 -> 0.2 -> 0 m/s, then yaw
+#     0.6 rad/s) so the rapid decel/accel transitions, in-place stepping and
+#     in-place turning are directly visible in the video and in the CSV.
+#   - Overlays on the recorded video: command/actual/average speed and yaw,
+#     per-foot contact state (ON/OFF + force), and the gait cycle time.
 #   - Writes isaac_diag.csv with per-step speed, foot height, foot force, etc.
 
 import os
@@ -33,19 +34,22 @@ from humanoid.envs import *
 from humanoid.utils import get_args, task_registry
 
 # ---------------------------------------------------------------------------
-# Speed profile: each entry is (num_control_steps, command_x [m/s]).
+# Speed profile: each entry is (num_control_steps, command_x [m/s], command_yaw [rad/s]).
 # Control loop runs at 50 Hz, so 500 steps == 10 s per segment.
-# The gait cycle maps 0 -> 0.6 m/s to 0.35 -> 0.7 s (see _get_cycle_time).
+# Low-speed transition model: ±0.2 m/s; at 0 command the phase keeps
+# advancing (in-place stepping), gait cycle fixed at 0.7 s.
+# Final segment adds in-place turning (yaw 0.6 rad/s).
 # ---------------------------------------------------------------------------
 VEL_PROFILE = [
-    (500, 0.2),   # slow  walk, cycle ~0.47 s
-    (500, 0.4),   # mid   walk, cycle ~0.58 s
-    (500, 0.6),   # fast  walk, cycle ~0.70 s (longest stride)
-    (500, 0.4),   # slow down
-    (500, 0.2),   # slow down further
-    (500, 0.0),   # stand still (phase cleared by stand logic)
+    (500, 0.2, 0.0),   # slow forward walk
+    (500, 0.0, 0.0),   # rapid decel -> in-place stepping
+    (500, -0.2, 0.0),  # backward walk
+    (500, 0.0, 0.0),   # decel -> stepping
+    (500, 0.2, 0.0),   # rapid accel to forward
+    (500, 0.0, 0.0),   # stop, keep stepping
+    (500, 0.0, 0.6),   # in-place turning (left, 0.6 rad/s) while stepping
 ]
-TOTAL_STEPS = sum(steps for steps, _ in VEL_PROFILE)
+TOTAL_STEPS = sum(steps for steps, _, _ in VEL_PROFILE)
 
 RENDER = True
 FIX_COMMAND = True
@@ -54,13 +58,13 @@ CHECKPOINT_URL = None  # set from --checkpoint_url_b64 in __main__ (cloud replay
 
 
 def current_command(step_idx):
-    """Return the command_x active at control step step_idx."""
+    """Return the (command_x, command_yaw) active at control step step_idx."""
     acc = 0
-    for steps, vel in VEL_PROFILE:
+    for steps, vx, yaw in VEL_PROFILE:
         if step_idx < acc + steps:
-            return vel
+            return vx, yaw
         acc += steps
-    return 0.0
+    return 0.0, 0.0
 
 
 def find_latest_checkpoint():
@@ -188,6 +192,9 @@ def play(args):
     env_cfg.commands.heading_command = False
     env_cfg.noise.curriculum = False
     train_cfg.seed = 12345
+    # exp2.1: 回放直接使用最终周期 cycle_time（0.58），不做周期退火
+    if hasattr(env_cfg.rewards, "cycle_time_start"):
+        env_cfg.rewards.cycle_time_start = None
 
     # Locate checkpoint: explicit --load_run/--checkpoint > --checkpoint_url_b64 download > latest local
     if args.load_run and args.checkpoint:
@@ -272,12 +279,12 @@ def play(args):
     frame_count = 0
 
     for i in range(TOTAL_STEPS):
-        cmd_x = current_command(i)
+        cmd_x, cmd_yaw = current_command(i)
 
         if FIX_COMMAND:
             env.commands[:, 0] = cmd_x
             env.commands[:, 1] = 0.0
-            env.commands[:, 2] = 0.0
+            env.commands[:, 2] = cmd_yaw
             env.commands[:, 3] = 0.0
 
         actions = policy(obs.detach())
@@ -331,10 +338,7 @@ def play(args):
                 img = img[..., :3]
 
                 avg_vel = vel_sum / step_accum if step_accum > 0 else 0.0
-                speed_ratio = min(max(real_cmd_x, 0.0), env_cfg.rewards.cycle_speed_max) / env_cfg.rewards.cycle_speed_max
-                cycle_time = env_cfg.rewards.cycle_time_min + speed_ratio * (
-                    env_cfg.rewards.cycle_time_max - env_cfg.rewards.cycle_time_min
-                )
+                cycle_time = env_cfg.rewards.cycle_time
 
                 l_on = diag["foot_force_l"][-1] > CONTACT_THRESHOLD_N
                 r_on = diag["foot_force_r"][-1] > CONTACT_THRESHOLD_N
@@ -370,10 +374,11 @@ def play(args):
     csv_path = save_diag_csv(diag, out_dir, env_cfg.env.num_actions, env.dt)
 
     print("\n[play_adaptive] === Summary ===")
-    for seg_i, (steps, vel) in enumerate(VEL_PROFILE):
-        seg_start = sum(s for s, _ in VEL_PROFILE[:seg_i])
+    for seg_i, (steps, vel, yaw) in enumerate(VEL_PROFILE):
+        seg_start = sum(s for s, _, _ in VEL_PROFILE[:seg_i])
         seg_vels = diag["base_vel_x"][seg_start:seg_start + steps]
-        print(f"  Segment {seg_i}: cmd={vel:.2f} m/s | avg_real={np.mean(seg_vels):.3f} m/s")
+        seg_yaws = diag["base_vel_yaw"][seg_start:seg_start + steps]
+        print(f"  Segment {seg_i}: cmd={vel:+.2f} m/s, yaw={yaw:+.2f} rad/s | avg_real_vx={np.mean(seg_vels):+.3f} m/s, avg_real_yaw={np.mean(seg_yaws):+.3f} rad/s")
     print(f"  Video: {video_path}")
     print(f"  CSV:   {csv_path}")
 
