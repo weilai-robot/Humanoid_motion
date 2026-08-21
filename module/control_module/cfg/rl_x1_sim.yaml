@@ -336,13 +336,13 @@ controllers:
     walk_step_conf:
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      cycle_time: 0.7      # 步态周期（固定周期模式 / 自适应模式缺省值）
-      sw_mode: True        # 原地步态是否接受周期波函数
-      cmd_threshold: 0.05 
-      adaptive_cycle: True    # 自适应周期开关（对齐训练 exp1.2；False 时使用固定 cycle_time）
-      cycle_time_min: 0.35    # 静止/低速最短周期 [s]
-      cycle_time_max: 0.7     # cycle_speed_max 时的最长周期 [s]
-      cycle_speed_max: 0.6    # 平面指令速度上限 [m/s]
+      cycle_time: 0.58     # 步态周期（低速模型 model_low：固定 0.58s）
+      sw_mode: False       # 对齐 model_low sw_switch=False：零命令相位连续推进（原地踏步不站立）
+      cmd_threshold: 0.05
+      adaptive_cycle: True    # min=max=0.58 → 固定周期 0.58
+      cycle_time_min: 0.58    # 固定周期（model_low 训练终值）
+      cycle_time_max: 0.58
+      cycle_speed_max: 0.6    # 平面指令速度上限 [m/s]（低速测试 RT 0.2，实际不触发）
       cycle_speed_ema_tau: 0.5  # 速度 EMA 时间常数 [s]
     obs_scales:
       lin_vel: 2.
@@ -351,7 +351,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_15.onnx
+      policy_file: cfg/control_module/policy/rl_walk_leg_21.onnx   # 低速模型 model_low 导出
       actions_size: 12
       observations_size: 47
       num_hist: 66
