@@ -92,6 +92,22 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
                   kv.second.as<double>();
             }
           }
+          // 读取摇杆档位配置（可选）：每轴一档，推过死区=固定速度、回中=0
+          if (pub["gear_mode"] && pub["gear_mode"]["enabled"].as<bool>()) {
+            auto g = pub["gear_mode"];
+            gear_mode_.enabled = true;
+            gear_mode_.deadzone = g["deadzone"].as<double>();
+            gear_mode_.x_scale = g["x_scale"].as<double>();
+            gear_mode_.x_neg_scale = g["x_neg_scale"].as<double>();
+            gear_mode_.y_scale = g["y_scale"].as<double>();
+            gear_mode_.y_neg_scale = g["y_neg_scale"].as<double>();
+            gear_mode_.z_scale = g["z_scale"].as<double>();
+            gear_mode_.z_neg_scale = g["z_neg_scale"].as<double>();
+            AIMRT_INFO("[JoyStick] Gear mode ON: deadzone={}, x={:+.2f}/{:+.2f} y={:+.2f}/{:+.2f} z={:+.2f}/{:+.2f}",
+                       gear_mode_.deadzone, gear_mode_.x_scale, -gear_mode_.x_neg_scale,
+                       gear_mode_.y_scale, -gear_mode_.y_neg_scale,
+                       gear_mode_.z_scale, -gear_mode_.z_neg_scale);
+          }
           twist_pubs_.push_back(std::move(publisher));
         }
       }
@@ -397,11 +413,20 @@ void JoyStickModule::MainLoop() {
 
           if (twist_pub.axis.find("linear-x") != twist_pub.axis.end()) {
             vel_msgs.linear.x = joy_data.axis[twist_pub.axis["linear-x"]];
-            target_pos[idx++] = joy_data.axis[twist_pub.axis["linear-x"]];
+            // 档位模式：轴值→固定档（推过死区=档位速度、回中=0；x 负向 0=禁用倒退）
+            if (gear_mode_.enabled) {
+              vel_msgs.linear.x = GearMapAxis(vel_msgs.linear.x, gear_mode_.deadzone,
+                                              gear_mode_.x_scale, gear_mode_.x_neg_scale);
+            }
+            target_pos[idx++] = vel_msgs.linear.x;
           }
           if (twist_pub.axis.find("linear-y") != twist_pub.axis.end()) {
             vel_msgs.linear.y = joy_data.axis[twist_pub.axis["linear-y"]];
-            target_pos[idx++] = joy_data.axis[twist_pub.axis["linear-y"]];
+            if (gear_mode_.enabled) {
+              vel_msgs.linear.y = GearMapAxis(vel_msgs.linear.y, gear_mode_.deadzone,
+                                              gear_mode_.y_scale, gear_mode_.y_neg_scale);
+            }
+            target_pos[idx++] = vel_msgs.linear.y;
           }
           if (twist_pub.axis.find("linear-z") != twist_pub.axis.end()) {
             vel_msgs.linear.z = joy_data.axis[twist_pub.axis["linear-z"]];
@@ -417,7 +442,11 @@ void JoyStickModule::MainLoop() {
           }
           if (twist_pub.axis.find("angular-z") != twist_pub.axis.end()) {
             vel_msgs.angular.z = joy_data.axis[twist_pub.axis["angular-z"]];
-            target_pos[idx++] = joy_data.axis[twist_pub.axis["angular-z"]];
+            if (gear_mode_.enabled) {
+              vel_msgs.angular.z = GearMapAxis(vel_msgs.angular.z, gear_mode_.deadzone,
+                                               gear_mode_.z_scale, gear_mode_.z_neg_scale);
+            }
+            target_pos[idx++] = vel_msgs.angular.z;
           }
           if (log_cnt % 50 == 0) {
             AIMRT_INFO("[JoyStick] Joystick vel -> linear=[{:.3f}, {:.3f}, {:.3f}] angular=[{:.3f}, {:.3f}, {:.3f}]",

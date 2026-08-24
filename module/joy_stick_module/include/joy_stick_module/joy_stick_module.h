@@ -36,6 +36,25 @@ struct ServiceClient {
   std::vector<uint8_t> buttons;
 };
 
+// 摇杆档位模式配置（每轴一档）：推过死区=固定速度档，回中=0
+struct GearModeConf {
+  bool enabled{false};
+  double deadzone{0.2};     // 死区阈值（轴原始值 [-1,1]）
+  double x_scale{0.25};     // x 正向档位 m/s（前）
+  double x_neg_scale{0.0};  // x 负向档位 m/s（0=禁用倒退，lin_vel_x 训练域无负样本）
+  double y_scale{0.15};     // y 正向档位 m/s
+  double y_neg_scale{0.15};
+  double z_scale{0.2};      // yaw 正向档位 rad/s
+  double z_neg_scale{0.2};
+};
+
+// 单轴轴值 → 档位速度映射（gear 模式用）
+inline double GearMapAxis(double axis_val, double deadzone, double pos_scale, double neg_scale) {
+  if (axis_val > deadzone) return pos_scale;    // 推过死区 → 正向固定档
+  if (axis_val < -deadzone) return -neg_scale;  // 负向推过死区 → 负向固定档（neg_scale=0 即禁用）
+  return 0.0;                                   // 死区内（回中）→ 0
+}
+
 class JoyStickModule : public aimrt::ModuleBase {
  public:
   JoyStickModule() = default;
@@ -64,6 +83,7 @@ class JoyStickModule : public aimrt::ModuleBase {
   std::vector<TwistPub> twist_pubs_;
   std::vector<ServiceClient> srv_clients_;
   std::shared_ptr<JoyVelLimiter> limiter_ = nullptr;
+  GearModeConf gear_mode_;
 
   uint32_t freq_{};
 
