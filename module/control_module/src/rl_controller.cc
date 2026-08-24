@@ -126,7 +126,19 @@ void RLController::Init(const YAML::Node& cfg_node) {
 
   diag_log_dir_ = "test_logs/data_csv";
   std::filesystem::create_directories(diag_log_dir_);
-  diag_log_max_count_ = 20 * (1000 / walk_step_conf_.decimation);
+  // 记录上限：可配置（缺省 600s 兜底防忘关 walk 无界写盘）。触发=进 walk 模式，
+  // 停止=退出 walk 或到限（先到为准）。20260824 前为写死 20s，长测试（推扰/换档连测）会中途断流。
+  if (cfg_node["walk_step_conf"]["diag_max_duration_s"]) {
+    diag_log_max_count_ = static_cast<int>(
+        cfg_node["walk_step_conf"]["diag_max_duration_s"].as<double>()
+        * (1000 / walk_step_conf_.decimation));
+  } else {
+    diag_log_max_count_ = 600 * (1000 / walk_step_conf_.decimation);
+  }
+  AIMRT_INFO("walk_diag max duration: {} frames ({:.0f}s @ {}Hz)",
+             diag_log_max_count_,
+             static_cast<double>(diag_log_max_count_) * walk_step_conf_.decimation / 1000.0,
+             1000 / walk_step_conf_.decimation);
   diag_logging_enabled_ = true;
   pd_pos_des_raw_.assign(onnx_conf_.actions_size, std::numeric_limits<double>::quiet_NaN());
   pd_pos_des_lpf_.assign(onnx_conf_.actions_size, std::numeric_limits<double>::quiet_NaN());

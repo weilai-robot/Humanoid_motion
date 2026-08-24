@@ -335,9 +335,10 @@ controllers:
     walk_step_conf:
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      cycle_time: 0.7      # 步态周期
+      cycle_time: 0.7      # 步态周期（v5 低抬慢拍锚点，与训练一致；错配即 20260824 上午事故）
       sw_mode: True        # 原地步态是否接受周期波函数
       cmd_threshold: 0.05
+      diag_max_duration_s: 600   # walk_diag 记录上限秒：进 walk 开记、退 walk/到限停；缺省 600
     # yaw_hold：复刻 sim env（little_step_v4）指令注入——训练时 obs 的 cmd_wz 是
     # env 内 P 控制器动态改写的值（clip(gain×wrap(anchor−yaw), ±clip)），policy 学的是
     # "服从 obs 中的 wz"。部署侧必须重建同一闭环，否则真机 wz 恒 0，yaw 回到 v1 漂移(+2.8°/s)。
