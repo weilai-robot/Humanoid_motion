@@ -107,9 +107,12 @@ void RLController::Init(const YAML::Node& cfg_node) {
   onnx_conf_.observations_clip = cfg_node["onnx_conf"]["observations_clip"].as<double>();
   onnx_conf_.actions_clip = cfg_node["onnx_conf"]["actions_clip"].as<double>();
 
-  // 分速度段模型（可选）：配置 stages 后启用多模型切换，忽略单模型字段
-  const auto& stages_node = cfg_node["onnx_conf"]["stages"];
-  if (stages_node && stages_node.IsSequence() && stages_node.size() > 0) {
+  // 分速度段模型（可选）：enable_stages 开关 + stages 非空时启用多模型切换，忽略单模型字段
+  // （stages 保留在 yaml 中但 enable_stages: False 时走单模型，方便两种方式一键切换）
+  const auto& onnx_node = cfg_node["onnx_conf"];
+  const bool enable_stages = onnx_node["enable_stages"] ? onnx_node["enable_stages"].as<bool>() : true;
+  const auto& stages_node = onnx_node["stages"];
+  if (enable_stages && stages_node && stages_node.IsSequence() && stages_node.size() > 0) {
     multi_stage_ = true;
     const auto& sw = cfg_node["onnx_conf"]["switch_conf"];
     if (sw) {
@@ -193,6 +196,9 @@ void RLController::Init(const YAML::Node& cfg_node) {
     AIMRT_INFO("RLController multi-stage enabled: {} stages, low_norm={}, hyst={}, still={}/{}s ratio={}, dwell={}s",
                stages_.size(), switch_conf_.low_norm, switch_conf_.low_norm_hyst, switch_conf_.still_norm,
                switch_conf_.still_window_s, switch_conf_.still_ratio, switch_conf_.min_dwell_s);
+  } else {
+    AIMRT_INFO("RLController single-model mode (enable_stages={} or stages empty): {}",
+               enable_stages ? "true" : "false", onnx_conf_.policy_file);
   }
 
   lpf_conf_.wc = cfg_node["lpf_conf"]["wc"].as<double>();

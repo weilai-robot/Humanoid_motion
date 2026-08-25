@@ -334,14 +334,16 @@ controllers:
     damping:    [3.0,  3.0,  4.0,   8.0,  1.5,  1.5,
                  3.0,  3.0,   4.0,  8.0,  1.5,  1.5]
     walk_step_conf:
+      # ★ 两种模式共用的全局参数：单模型模式下 min=max=0.42 即固定周期；
+      #   多 stage 模式下周期/sw_mode 被各 stage 覆盖，此处仅作缺省
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      cycle_time: 0.7      # 步态周期（固定周期模式 / 自适应模式缺省值）
-      sw_mode: True        # 原地步态是否接受周期波函数
-      cmd_threshold: 0.05 
-      adaptive_cycle: True    # 自适应周期开关（对齐训练 exp1.2；False 时使用固定 cycle_time）
-      cycle_time_min: 0.5     # 静止/低速最短周期 [s]（对齐 model_high 训练值）
-      cycle_time_max: 0.8     # cycle_speed_max 时的最长周期 [s]
+      sw_mode: False        # 零命令站立（stage 可覆盖）
+      cmd_threshold: 0.05
+      adaptive_cycle: True
+      cycle_time: 0.42     # 固定周期模式缺省 / 单模型固定周期
+      cycle_time_min: 0.42  # 单模型固定 0.42（min=max）
+      cycle_time_max: 0.42
       cycle_speed_max: 0.8    # 平面指令速度上限 [m/s]
       cycle_speed_ema_tau: 0.5  # 速度 EMA 时间常数 [s]
     obs_scales:
@@ -351,7 +353,9 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      # ── 多阶段模型配置（配置 stages 后启用分速度段切换，忽略下面的单模型字段）──
+      # ★★★ 一键切换：True = 分速度段双模型（stages 生效）；False = 单模型（下方单模型字段生效）
+      enable_stages: False
+      # ── 多阶段配置（enable_stages: True 时生效）──
       switch_conf:
         low_norm: 0.2        # 上切阈值：|x| 或 |y| 超过 → 切高速模型
         low_norm_hyst: 0.18  # 下切阈值：|x| 和 |y| 均低于 → 切回低速模型（迟滞）
@@ -360,32 +364,32 @@ controllers:
         still_ratio: 0.9     # 窗口内静止帧占比阈值（宽松计）
         min_dwell_s: 1.0     # 两次切换最小间隔 [s]
       stages:
-        # stage 0: 低速模型（model_low：固定周期 0.58s，sw_switch=False 零命令原地踏步不站立）
+        # stage 0: 低速模型（x1_stable_52：固定周期 0.42s，sw_switch=False 零命令原地踏步不站立）
         - name: low_speed
-          policy_file: cfg/control_module/policy/rl_walk_leg_stable_21.onnx   # TODO: model_low 导出后替换
+          policy_file: cfg/control_module/policy/x1_stable_52.onnx
           actions_size: 12
           observations_size: 47
           num_hist: 66
           observations_clip: 100.
           actions_clip: 100.
-          sw_mode: False          # 对齐 model_low sw_switch=False：零命令相位连续推进（原地踏步）
-          cmd_limit_x: 0.2        # 对齐 model_low 训练命令范围 x∈[-0.2,0.2]
+          sw_mode: False          # 零命令相位连续推进（原地踏步）
+          cmd_limit_x: 0.2        # 训练命令范围 x∈[-0.2,0.2]
           cmd_limit_y: 0.2        # y∈[-0.2,0.2]
-          cycle_time_min: 0.58    # 固定周期：min=max=0.58（model_low 训练终值）
-          cycle_time_max: 0.58
+          cycle_time_min: 0.42    # 固定周期：min=max=0.42
+          cycle_time_max: 0.42
           # phase_offset: 0.5     # 可选：若两模型迈脚语义相反（切换瞬间迈错脚），取消注释试 0.5
-        # stage 1: 高速模型（model_high：变周期 0.5~0.8s，sw_switch=True 可站立）
+        # stage 1: 高速模型（F1_one_21：变周期 0.35~0.7s，sw_switch=True 可站立）
         - name: high_speed
-          policy_file: cfg/control_module/policy/rl_walk_leg_110.onnx   # TODO: model_high 导出后替换
+          policy_file: cfg/control_module/policy/F1_one_21.onnx
           actions_size: 12
           observations_size: 47
           num_hist: 66
           observations_clip: 100.
           actions_clip: 100.
-          cycle_time_min: 0.5     # 对齐 model_high 自适应周期映射（覆盖全局 0.5/0.8）
-          cycle_time_max: 0.8
-      # ── 旧单模型字段（无 stages 时生效；有 stages 时被忽略）──
-      policy_file: cfg/control_module/policy/rl_walk_leg_15.onnx
+          cycle_time_min: 0.35    # 自适应周期映射
+          cycle_time_max: 0.7
+      # ── 单模型字段（enable_stages: False 时生效）──
+      policy_file: cfg/control_module/policy/x1_stable_52.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66

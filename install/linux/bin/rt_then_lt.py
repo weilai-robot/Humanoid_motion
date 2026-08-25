@@ -5,7 +5,7 @@ RT→LT 联合模拟脚本——仿真中复刻"先按 RT 直线行走，过一�
 流程（按 Enter 启动，全程自动）：
   t=0     : 切 walk_leg（重复发 1s）→ 等 1s 稳定 → 锁存目标航向
   t=2s 起 : RT 偏航闭环（0.4 m/s + yaw PID），持续 RT_DURATION 秒
-  t=2+RT_DURATION: 自动触发 LT——捕获当前速度，8s 二次凹减速 ((1-t/8)^2)
+  t=2+RT_DURATION: 自动触发 LT——捕获当前速度，4s 二次凹减速 ((1-t/4)^2)
   刹停    : 发 /stand_mode 回站立，结束
 
 复刻自：
@@ -28,14 +28,15 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
 
 # ── RT 参数（与 rt_walk_verify.py 一致；如需对齐真机请改成 yaml 的 1.2/0.5/0.3）──
-LINEAR_X = 0.4          # 前进速度 m/s
+LINEAR_X = 0.2          # 前进速度 m/s
 YAW_KP = 0.8
 YAW_KI = 0.3
 YAW_KD = 0.2
 MAX_ANGULAR_Z = 0.5
 I_LIMIT = 0.3
-# ── LT 参数（与 lt_brake_sim.py / joy_x1.yaml lt_brake 一致）──
-BRAKE_DURATION = 8.0    # 刹车总时长 s
+# ── LT 参数（测试用 4s 刹车；真机 yaml lt_brake.duration 为 8.0）──
+BRAKE_DURATION = 4.0    # 刹车总时长 s
+HOLD_AFTER_BRAKE = 10.0 # 刹停后原地保持时长 s（保持 10s 后再发 /stand_mode 回 stand）
 # ── 场景时间线 ──
 RT_DURATION = 15.0      # RT 直线行走持续时长 s（改这里控制"过一段时间再按 LT"）
 MODE_RETRY = 1.0        # 模式切换重复发布时长 s
@@ -159,7 +160,14 @@ class RtThenLt(Node):
         linear_t = min(t / BRAKE_DURATION, 1.0)   # 先 clamp 到 [0,1] 再平方，避免 t>duration 后反弹
         scale = (1.0 - linear_t) ** 2
         if scale <= 0.0:
-            # 刹停 → 回 stand
+            # 刹停 → 保持零速原地停 HOLD_AFTER_BRAKE 秒 → 再发 /stand_mode 回 stand
+            if not hasattr(self, "brake_hold_t0"):
+                self.brake_hold_t0 = time.monotonic()
+                self.get_logger().info(f"[LT] 刹停完成，原地保持 {HOLD_AFTER_BRAKE}s 后回 stand ...")
+            if time.monotonic() - self.brake_hold_t0 < HOLD_AFTER_BRAKE:
+                zero = Twist()
+                self.vel_pub.publish(zero)   # 保持发布零速度
+                return
             self.phase = "done"
             smsg = Float32()
             smsg.data = 0.0
@@ -168,7 +176,7 @@ class RtThenLt(Node):
                 time.sleep(1.0 / PUB_RATE)
             zero = Twist()
             self.vel_pub.publish(zero)
-            self.get_logger().info("======== LT 刹停完成，已回 stand，序列结束 ========")
+            self.get_logger().info("======== 已发 /stand_mode 回 stand，序列结束 ========")
             return
 
         msg = Twist()
