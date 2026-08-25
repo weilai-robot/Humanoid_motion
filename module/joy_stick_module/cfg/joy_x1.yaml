@@ -16,7 +16,7 @@ rt_auto_walk:
 
 # LT 刹车参数（按 LT 键触发，凹函数减速）
 lt_brake:
-  duration: 8.0           # 刹车总时长 s
+  duration: 4.0           # 刹车总时长 s
 
 float_pubs:
   - topic_name: /idle_mode
