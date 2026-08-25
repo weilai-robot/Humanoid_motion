@@ -123,6 +123,12 @@ class JoyStickModule : public aimrt::ModuleBase {
   double rt_max_angular_z_ = 0.5;
   double rt_i_limit_ = 0.3;            // 积分项限幅 rad/s
   double rt_linear_y_ = 0.0;           // 侧向补偿 m/s（正=右，负=左）
+
+  // R3（右摇杆按下=按键10）原地转弯状态机：固定 (0,0,turn_angular_z_)，按一次开/再按一次停
+  bool prev_r3_pressed_ = false;
+  bool turn_mode_active_ = false;
+  std::chrono::steady_clock::time_point turn_t0_;
+  double turn_angular_z_ = 0.2;        // rad/s（默认与 gear_mode z_scale 同源）
 };
 
 }  // namespace xyber_x1_infer::joy_stick_module

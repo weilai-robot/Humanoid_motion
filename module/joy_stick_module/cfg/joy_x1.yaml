@@ -14,6 +14,11 @@ rt_auto_walk:
   max_angular_z: 0.6      # 最大转弯角速度 rad/s 限幅
   i_limit: 0.5            # 积分项限幅 rad/s（防饱和）
 
+# R3（右摇杆按下=按键10）原地转弯：固定 (0,0,angular_z)，按一次开/再按一次停
+# angular_z 与 gear_mode z_scale 同源（v5_7500 真机验证档位 0.2）
+r3_turn:
+  angular_z: 0.2
+
 float_pubs:
   - topic_name: /idle_mode
     buttons: [7]

@@ -264,7 +264,7 @@ void JoyStickModule::MainLoop() {
     }
     // 上升沿触发：切换 RT 行走开/关
     if (rt_pressed && !prev_rt_pressed_) {
-      if (!rt_walk_active_ && !lt_brake_active_ && imu_received_) {
+      if (!rt_walk_active_ && !lt_brake_active_ && !turn_mode_active_ && imu_received_) {
         // ── 开启：读取当前 yaw 作为目标航向 ──
         {
           std::shared_lock<std::shared_mutex> lock(imu_mutex_);
@@ -368,7 +368,68 @@ void JoyStickModule::MainLoop() {
       }  // end else (after settle)
     }
 
-    if (!lt_brake_active_ && !rt_walk_active_) {
+    // ── R3 原地转弯检测（固定 (0,0,wz)，按一次开/再按一次停）──
+    bool r3_pressed = false;
+    if (joy_data.buttons.size() > 10) {
+      r3_pressed = static_cast<bool>(joy_data.buttons[10]);  // R3=按键10
+    }
+    if (r3_pressed && !prev_r3_pressed_) {
+      if (!turn_mode_active_ && !lt_brake_active_) {
+        // 开启：互斥关闭其它自动行走通道
+        walk_mode_active_ = false;
+        rt_walk_active_ = false;
+        turn_mode_active_ = true;
+        turn_t0_ = std::chrono::steady_clock::now();
+        AIMRT_INFO("[JoyStick] R3 turn STARTED, wz={:.3f} rad/s", turn_angular_z_);
+      } else if (turn_mode_active_) {
+        // 关闭：发布零速度 + 回 stand（同步清 walk_mode，避免转弯期间误按 X 残留直行通道）
+        turn_mode_active_ = false;
+        walk_mode_active_ = false;
+        vel_msgs.linear.x = 0.0;
+        vel_msgs.linear.y = 0.0;
+        vel_msgs.angular.z = 0.0;
+        for (auto& tp : twist_pubs_) {
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+          if (tp.pub_limiter)
+            aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+        }
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/stand_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+        AIMRT_INFO("[JoyStick] R3 turn STOPPED, back to stand");
+      }
+    }
+    prev_r3_pressed_ = r3_pressed;
+
+    // ── R3 原地转弯执行 ──
+    if (turn_mode_active_ && !lt_brake_active_) {
+      double turn_t = std::chrono::duration<double>(
+          std::chrono::steady_clock::now() - turn_t0_).count();
+      // 前 1s 持续发 /walk_mode 确保进入 walk_leg（同 RT 模式）
+      if (turn_t < 1.0) {
+        for (auto& fp : float_pubs_)
+          if (fp.topic_name == "/walk_mode")
+            aimrt::channel::Publish<std_msgs::msg::Float32>(fp.pub, button_msgs);
+      }
+      vel_msgs.linear.x  = 0.0;
+      vel_msgs.linear.y  = 0.0;
+      vel_msgs.linear.z  = 0.0;
+      vel_msgs.angular.x = 0.0;
+      vel_msgs.angular.y = 0.0;
+      vel_msgs.angular.z = turn_angular_z_;  // 原地转弯固定角速度
+      for (auto& tp : twist_pubs_) {
+        aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub, vel_msgs);
+        if (tp.pub_limiter)
+          aimrt::channel::Publish<geometry_msgs::msg::Twist>(tp.pub_limiter, vel_msgs);
+      }
+      last_vel_x_ = 0.0;
+      last_vel_y_ = 0.0;
+      last_vel_wz_ = turn_angular_z_;
+      if (log_cnt % 20 == 0)
+        AIMRT_INFO("[JoyStick] R3 turn: wz={:.3f} rad/s", turn_angular_z_);
+    }
+
+    if (!lt_brake_active_ && !rt_walk_active_ && !turn_mode_active_) {
     for (auto twist_pub : twist_pubs_) {
       // 行走模式激活时绕过按钮检查，直接发布；否则需按住对应按钮
       bool ret = walk_mode_active_;
