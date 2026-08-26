@@ -69,6 +69,8 @@ class RLController : public ControllerBase {
     int num_hist;
     double observations_clip;
     double actions_clip;
+    int inter_op_threads;   // 算子间并行线程数（顺序 MLP 用 1）
+    int intra_op_threads;  // 算子内并行线程数（实时控制用 1，避免 fork worker 到隔离核外）
   } onnx_conf_;
 
   struct LPFConf {

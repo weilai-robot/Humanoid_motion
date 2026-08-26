@@ -1,9 +1,11 @@
 #include "control_module/control_module.h"
 
 #include <algorithm>
+#include <pthread.h>
 
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "control_module/global.h"
+#include "internal/common_utils.h"
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 
@@ -21,6 +23,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       YAML::Node cfg_node = YAML::LoadFile(file_path.data());
       freq_ = cfg_node["control_frequecy"].as<int32_t>();
       use_sim_handles_ = cfg_node["use_sim_handles"].as<bool>();
+      rt_priority_ = cfg_node["rt_priority"] ? cfg_node["rt_priority"].as<int32_t>() : -1;
+      bind_cpu_ = cfg_node["bind_cpu"] ? cfg_node["bind_cpu"].as<int32_t>() : -1;
 
       // 解析状态机
       last_trigger_time_ = high_resolution_clock::now();
@@ -228,6 +232,10 @@ void ControlModule::Shutdown() {
 bool ControlModule::MainLoop() {
   try {
     AIMRT_INFO("Start MainLoop.");
+    // 设置线程实时属性（参数从 yaml 配置读取，与 dcu 模块同模式）
+    if (!xyber_utils::SetRealTimeThread(pthread_self(), "rl_control_pub", rt_priority_, bind_cpu_)) {
+      AIMRT_ERROR("rl_control_pub real-time setup failed, running without SCHED_FIFO/CPU affinity");
+    }
     auto const period = nanoseconds(1'000'000'000 / freq_);
     time_point<high_resolution_clock, nanoseconds> next_iteration_time = high_resolution_clock::now();
 

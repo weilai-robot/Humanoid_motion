@@ -313,7 +313,9 @@ int64_t EthercatManager::CalcDcPiSync(int64_t refTime, int64_t cycle_time, int64
 
 void EthercatManager::WorkLoop() {
   LOG_DEBUG("Workloop is running now...");
-  xyber_utils::SetRealTimeThread(pthread_self(), "ecat_io_loop", cfg_.rt_priority, cfg_.bind_cpu);
+  if (!xyber_utils::SetRealTimeThread(pthread_self(), "ecat_io_loop", cfg_.rt_priority, cfg_.bind_cpu)) {
+    LOG_ERROR("ecat_io_loop real-time setup failed, running without SCHED_FIFO/CPU affinity");
+  }
 
   // For DC computation
   int32_t shift_time = cfg_.cycle_time_ns / 2 - 20000;  // 20us for SM-IRQ

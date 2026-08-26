@@ -46,6 +46,8 @@ class ControlModule : public aimrt::ModuleBase {
 
   bool use_sim_handles_;
   int32_t freq_;
+  int32_t rt_priority_{};  // rl_control_pub_thread 实时优先级（SCHED_FIFO）
+  int32_t bind_cpu_{};     // rl_control_pub_thread 绑核
   std::atomic_bool run_flag_{true};
   time_point<high_resolution_clock> last_trigger_time_;
 
