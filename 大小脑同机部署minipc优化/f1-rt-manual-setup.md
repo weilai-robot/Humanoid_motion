@@ -186,13 +186,12 @@ sudo chmod 0755 /opt/f1/scripts/run/rt_irq_affinity.sh
 ```
 
 ```bash
-# 3) 写 systemd service（After=network 确保网卡中断已注册；Before=小脑服务确保先就绪）
+# 3) 写 systemd service（After=network 确保网卡中断已注册）
 sudo tee /etc/systemd/system/f1-rt-irq.service > /dev/null <<'EOF'
 [Unit]
 Description=F1 RT IRQ affinity setup
 DefaultDependencies=no
 After=network-online.target
-Before=f1-motion-control.service
 
 [Service]
 Type=oneshot
@@ -208,7 +207,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable f1-rt-irq.service
 ```
 
-> ⚠️ `Before=f1-motion-control.service` 是为了在小脑启动前把中断绑好。**请核对你机器上小脑服务的真实名称**，名字不对就改这一行（名字不对不会报错，但失去时序保证）。
+> ⚠️ 中断绑定由 `f1-rt-irq.service` 开机自动执行一次并持久生效，与小脑启动无依赖。小脑当前是手动 `./run.sh` 启动；若中途热插拔过网卡/USB 网卡，启动小脑前手动跑一遍 `sudo /opt/f1/scripts/run/rt_irq_affinity.sh`。
 
 **验证**：
 ```bash
