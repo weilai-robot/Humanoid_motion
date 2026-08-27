@@ -1,5 +1,7 @@
 control_frequecy: 1000
 use_sim_handles: False
+rt_priority: 80        # rl_control_pub_thread 实时优先级 (SCHED_FIFO)
+bind_cpu: 6            # rl_control_pub_thread 绑核
 
 sub_joy_vel_name: /cmd_vel_limiter      # controller 接收的运动指令
 sub_imu_data_name: /imu/data            # IMU数据
@@ -351,6 +353,8 @@ controllers:
       num_hist: 66
       observations_clip: 100.
       actions_clip: 100.
+      inter_op_threads: 1   # 算子间并行线程数（顺序 MLP，保持 1）
+      intra_op_threads: 1   # 算子内并行线程数（实时控制用 1，禁止 fork worker 到隔离核外）
     lpf_conf:
       wc: 100.
       ts: 0.001
@@ -389,6 +393,8 @@ controllers:
       num_hist: 66
       observations_clip: 100.
       actions_clip: 100.
+      inter_op_threads: 1   # 算子间并行线程数（顺序 MLP，保持 1）
+      intra_op_threads: 1   # 算子内并行线程数（实时控制用 1，禁止 fork worker 到隔离核外）
     lpf_conf:
       wc: 100.
       ts: 0.001

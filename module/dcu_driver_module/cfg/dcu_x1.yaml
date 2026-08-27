@@ -79,7 +79,7 @@ actuator_list:  # 执行器列表
 
 ethercat:
   ifname: enp2s0          # 网卡名
-  bind_cpu: 9             # 绑定CPU核心
+  bind_cpu: 4             # 绑定CPU核心
   rt_priority: 90         # 线程优先级
   enable_dc: true         # 使能DC同步
   cycle_time_ns: 1000000  # 刷新周期1ms - 1khz

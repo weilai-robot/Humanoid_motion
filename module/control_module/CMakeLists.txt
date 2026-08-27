@@ -45,6 +45,7 @@ target_link_libraries(
   PRIVATE yaml-cpp::yaml-cpp
   PUBLIC aimrt::interface::aimrt_module_cpp_interface
          aimrt::interface::aimrt_module_ros2_interface
+         xyber_controller
          my_ros2_proto_aimrt_rpc_gencode
          my_ros2_proto::my_ros2_proto__rosidl_generator_cpp
          my_ros2_proto::my_ros2_proto__rosidl_typesupport_cpp

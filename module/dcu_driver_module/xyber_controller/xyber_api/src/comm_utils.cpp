@@ -50,7 +50,7 @@ bool SetRealTimeThread(pthread_t pid, std::string name, int rt_priority, int bin
 
     struct sched_param s_parm;
     s_parm.sched_priority = rt_priority;
-    if (pthread_setschedparam(pid, SCHED_FIFO, &s_parm) < 0) {
+    if (pthread_setschedparam(pid, SCHED_FIFO, &s_parm) != 0) {
       LOG_ERROR("setschedu error %s", strerror(errno));
       ret = false;
     } else {
