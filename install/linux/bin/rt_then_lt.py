@@ -28,7 +28,7 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32
 
 # ── RT 参数（与 rt_walk_verify.py 一致；如需对齐真机请改成 yaml 的 1.2/0.5/0.3）──
-LINEAR_X = 0.2          # 前进速度 m/s
+LINEAR_X = 0.5          # 前进速度 m/s
 YAW_KP = 0.8
 YAW_KI = 0.3
 YAW_KD = 0.2

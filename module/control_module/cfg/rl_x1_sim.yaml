@@ -338,12 +338,12 @@ controllers:
       #   多 stage 模式下周期/sw_mode 被各 stage 覆盖，此处仅作缺省
       action_scale: 0.5    # 推理的增量结果，缩放系数
       decimation: 10       # 采样间隔
-      sw_mode: False        # 零命令站立（stage 可覆盖）
+      sw_mode: True        # 零命令原地站立（re0_02 模型：速度0时不踏步）
       cmd_threshold: 0.05
-      adaptive_cycle: True
-      cycle_time: 0.42     # 固定周期模式缺省 / 单模型固定周期
-      cycle_time_min: 0.42  # 单模型固定 0.42（min=max）
-      cycle_time_max: 0.42
+      adaptive_cycle: False
+      cycle_time: 0.7     # 固定周期
+      cycle_time_min: 0.7  # 单模型固定 0.7（min=max）
+      cycle_time_max: 0.7
       cycle_speed_max: 0.8    # 平面指令速度上限 [m/s]
       cycle_speed_ema_tau: 0.5  # 速度 EMA 时间常数 [s]
     obs_scales:
@@ -389,7 +389,7 @@ controllers:
           cycle_time_min: 0.35    # 自适应周期映射
           cycle_time_max: 0.7
       # ── 单模型字段（enable_stages: False 时生效）──
-      policy_file: cfg/control_module/policy/x1_stable_52.onnx
+      policy_file: cfg/control_module/policy/re0_02.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66
