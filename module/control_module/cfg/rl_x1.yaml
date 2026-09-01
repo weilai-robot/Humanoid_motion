@@ -386,7 +386,7 @@ controllers:
           cycle_time_min: 0.35    # 自适应周期映射
           cycle_time_max: 0.7
       # ── 单模型字段（enable_stages: False 时生效）──
-      policy_file: cfg/control_module/policy/re0_12t.onnx
+      policy_file: cfg/control_module/policy/re0_13.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66
