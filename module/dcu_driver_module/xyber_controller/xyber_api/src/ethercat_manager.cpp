@@ -10,12 +10,28 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <iostream>
+#include <limits>
 
 #include "ethercat.h"
 
 #define WKC_ERROR_CNT 10
 #define EC_TIMEOUTMON 500
+
+namespace {
+// 统计文件名时间戳（wall 时钟）
+std::string StatsTimestamp() {
+  const std::time_t t = std::time(nullptr);
+  std::tm tm_val{};
+  localtime_r(&t, &tm_val);
+  char buf[24];
+  std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm_val);
+  return std::string(buf);
+}
+}  // namespace
 
 using namespace std::chrono_literals;
 
@@ -49,15 +65,11 @@ bool EthercatManager::Start(EthercatConfig cfg) {
     return false;
   }
 
-  // BUG FIX:
-  // start process as soon as possible, or the platinum`s watchdog will be
-  // expired.
+  // Start the cyclic thread immediately to avoid the actuator watchdog
+  // expiring. Real-time setup result is reported by WorkLoop itself.
   is_running_ = true;
   work_loop_thread_ = std::thread(&EthercatManager::WorkLoop, this);
   error_handler_thread_ = std::thread(&EthercatManager::ErrorHandler, this);
-
-  // wait for threads up
-  std::this_thread::sleep_for(100ms);
 
   LOG_DEBUG("EthercatManager is running now.");
   return true;
@@ -313,7 +325,9 @@ int64_t EthercatManager::CalcDcPiSync(int64_t refTime, int64_t cycle_time, int64
 
 void EthercatManager::WorkLoop() {
   LOG_DEBUG("Workloop is running now...");
-  xyber_utils::SetRealTimeThread(pthread_self(), "ecat_io_loop", cfg_.rt_priority, cfg_.bind_cpu);
+  if (!xyber_utils::SetRealTimeThread(pthread_self(), "ecat_io_loop", cfg_.rt_priority, cfg_.bind_cpu)) {
+    LOG_ERROR("ecat_io_loop real-time setup failed, running without SCHED_FIFO/CPU affinity");
+  }
 
   // For DC computation
   int32_t shift_time = cfg_.cycle_time_ns / 2 - 20000;  // 20us for SM-IRQ
@@ -353,13 +367,36 @@ void EthercatManager::WorkLoop() {
       now_time += std::chrono::nanoseconds(cfg_.cycle_time_ns + timer_offset);
       std::this_thread::sleep_until(now_time);
 
-      dc_ref_time += (ec_DCtime - last_dc_time);
+      const int64_t dc_elapsed = ec_DCtime - last_dc_time;
+      dc_ref_time += dc_elapsed;
       last_dc_time = ec_DCtime;
       timer_offset = CalcDcPiSync(dc_ref_time, cfg_.cycle_time_ns, shift_time);
+
+      // R3: 瞬时 DC 偏差（本次 DC 时钟增量与名义周期的差）
+      const int64_t dc_dev = dc_elapsed - static_cast<int64_t>(cfg_.cycle_time_ns);
+      const int64_t dc_abs = dc_dev < 0 ? -dc_dev : dc_dev;
+      st_dc_dev_sum_ns_.fetch_add(dc_dev, std::memory_order_relaxed);
+      int64_t cur_max = st_dc_dev_abs_max_ns_.load(std::memory_order_relaxed);
+      if (dc_abs > cur_max) st_dc_dev_abs_max_ns_.store(dc_abs, std::memory_order_relaxed);
+      int64_t cur_min = st_dc_dev_abs_min_ns_.load(std::memory_order_relaxed);
+      if (dc_abs < cur_min) st_dc_dev_abs_min_ns_.store(dc_abs, std::memory_order_relaxed);
+      st_dc_cnt_.fetch_add(1, std::memory_order_relaxed);
     } else {
       now_time += std::chrono::nanoseconds(cfg_.cycle_time_ns);
       std::this_thread::sleep_until(now_time);
     }
+
+    // R4: 本周期调度迟到（唤醒时刻 - 目标时刻；迟到超过周期 20% 记一次 overrun）
+    const int64_t late_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - now_time).count();
+    if (late_ns > 0) {
+      st_cycle_late_sum_ns_.fetch_add(late_ns, std::memory_order_relaxed);
+      int64_t l_max = st_cycle_late_max_ns_.load(std::memory_order_relaxed);
+      if (late_ns > l_max) st_cycle_late_max_ns_.store(late_ns, std::memory_order_relaxed);
+      if (late_ns > static_cast<int64_t>(cfg_.cycle_time_ns) / 5)
+        st_cycle_overruns_.fetch_add(1, std::memory_order_relaxed);
+    }
+    st_cycle_cnt_.fetch_add(1, std::memory_order_relaxed);
   }
 }
 
@@ -369,8 +406,25 @@ void EthercatManager::ErrorHandler() {
 
   std::this_thread::sleep_for(std::chrono::nanoseconds(cfg_.cycle_time_ns * 20));
 
+  // R3/R4 统计文件（数据只落文件，不打印终端；失败则静默关闭统计，不影响总线）
+  std::error_code fs_ec;
+  std::filesystem::create_directories("test_logs/ecat_stats", fs_ec);
+  const std::string stats_path = "test_logs/ecat_stats/ecat_stats_" + StatsTimestamp() + ".csv";
+  st_file_.open(stats_path, std::ios::out | std::ios::app);
+  if (st_file_.is_open()) {
+    st_file_ << "wall_ts,steady_ns,dc_cnt,dc_dev_avg_ns,dc_dev_abs_min_ns,dc_dev_abs_max_ns,"
+                "cycle_cnt,cycle_late_avg_ns,cycle_late_max_ns,cycle_overruns,wkc_bad_polls\n";
+  }
+  uint64_t poll_cnt = 0;
+
   while (is_running_) {
     std::this_thread::sleep_for(100ms);
+
+    // 每 100 次 × 100ms = 10s 落一行统计
+    if (st_file_.is_open() && ++poll_cnt >= 100) {
+      poll_cnt = 0;
+      WriteStatsRow();
+    }
 
     // check error resume
     if (wkc_error_) {
@@ -383,6 +437,7 @@ void EthercatManager::ErrorHandler() {
     }
     // check wkc
     if (current_wkc_ < expected_wkc_ || ec_group[0].docheckstate) {
+      ++st_wkc_bad_polls_;
       LOG_WARN("wkc < expected_wkc , wkc: %d, expected_wkc: %d", current_wkc_, expected_wkc_);
       ec_group[0].docheckstate = FALSE;
       ec_readstate();
@@ -454,6 +509,41 @@ void EthercatManager::ErrorHandler() {
       wkc_error_count_ = 0;
     }
   }
+
+  if (st_file_.is_open()) {
+    st_file_.flush();
+    st_file_.close();
+  }
+}
+
+void EthercatManager::WriteStatsRow() {
+  // 读出并清零（relaxed：与 WorkLoop 的写入以窗口为单位对齐，边界样本最多差 1 周期，统计可接受）
+  const int64_t dc_sum = st_dc_dev_sum_ns_.exchange(0, std::memory_order_relaxed);
+  const int64_t dc_min = st_dc_dev_abs_min_ns_.exchange(INT64_MIN, std::memory_order_relaxed);
+  const int64_t dc_max = st_dc_dev_abs_max_ns_.exchange(0, std::memory_order_relaxed);
+  const uint64_t dc_cnt = st_dc_cnt_.exchange(0, std::memory_order_relaxed);
+  const int64_t late_sum = st_cycle_late_sum_ns_.exchange(0, std::memory_order_relaxed);
+  const int64_t late_max = st_cycle_late_max_ns_.exchange(0, std::memory_order_relaxed);
+  const uint64_t cyc_cnt = st_cycle_cnt_.exchange(0, std::memory_order_relaxed);
+  const uint64_t overruns = st_cycle_overruns_.exchange(0, std::memory_order_relaxed);
+  const uint64_t wkc_bad = st_wkc_bad_polls_;
+  st_wkc_bad_polls_ = 0;
+
+  const auto steady_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now().time_since_epoch()).count();
+
+  st_file_ << StatsTimestamp() << ',' << steady_ns << ',' << dc_cnt << ',';
+  if (dc_cnt > 0)
+    st_file_ << (dc_sum / static_cast<int64_t>(dc_cnt)) << ',' << dc_min << ',' << dc_max << ',';
+  else
+    st_file_ << ",,,";
+  st_file_ << cyc_cnt << ',';
+  if (cyc_cnt > 0)
+    st_file_ << (late_sum / static_cast<int64_t>(cyc_cnt)) << ',' << late_max << ',';
+  else
+    st_file_ << ",,";
+  st_file_ << overruns << ',' << wkc_bad << '\n';
+  st_file_.flush();
 }
 
 }  // namespace ethercat_manager

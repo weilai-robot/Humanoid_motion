@@ -106,6 +106,13 @@ void RLController::Init(const YAML::Node& cfg_node) {
   onnx_conf_.num_hist = cfg_node["onnx_conf"]["num_hist"].as<int32_t>();
   onnx_conf_.observations_clip = cfg_node["onnx_conf"]["observations_clip"].as<double>();
   onnx_conf_.actions_clip = cfg_node["onnx_conf"]["actions_clip"].as<double>();
+  // 线程数带默认值 1：兼容旧配置，且默认即单线程串行（避免 ORT 默认吃满全部核）
+  onnx_conf_.inter_op_threads = cfg_node["onnx_conf"]["inter_op_threads"]
+                                    ? cfg_node["onnx_conf"]["inter_op_threads"].as<int32_t>()
+                                    : 1;
+  onnx_conf_.intra_op_threads = cfg_node["onnx_conf"]["intra_op_threads"]
+                                    ? cfg_node["onnx_conf"]["intra_op_threads"].as<int32_t>()
+                                    : 1;
   lpf_conf_.wc = cfg_node["lpf_conf"]["wc"].as<double>();
   lpf_conf_.ts = cfg_node["lpf_conf"]["ts"].as<double>();
   auto paralle_list = cfg_node["lpf_conf"]["paralle_list"].as<std::vector<std::string>>();
@@ -326,7 +333,10 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
 void RLController::LoadModel() {
   std::shared_ptr<Ort::Env> onnxEnvPrt(new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxController"));
   Ort::SessionOptions sessionOptions;
-  sessionOptions.SetInterOpNumThreads(1);
+  sessionOptions.SetInterOpNumThreads(onnx_conf_.inter_op_threads);
+  sessionOptions.SetIntraOpNumThreads(onnx_conf_.intra_op_threads);
+  // 禁用算子内空闲 worker 自旋，避免在管家核上持续 busy-wait 产生背景噪声
+  sessionOptions.AddConfigEntry("session.intra_op.allow_spinning", "0");
   session_ptr_ = std::make_unique<Ort::Session>(*onnxEnvPrt, onnx_conf_.policy_file.c_str(), sessionOptions);
 
   input_names_.clear();

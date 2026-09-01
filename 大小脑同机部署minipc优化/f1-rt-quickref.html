@@ -1,0 +1,692 @@
+<style>
+  /* ===== tokens (dark-first, instrument) ===== */
+  :root{
+    --ink:#0E1116; --panel:#161A21; --panel2:#1B2027; --rule:#2A313B;
+    --fg:#D6DCE4; --fg-dim:#8B94A1; --fg-faint:#5A626E;
+    --accent:#E8A33D; --accent-soft:rgba(232,163,61,.14);
+    --ok:#5BA86B; --danger:#D9534F;
+    --grid-line:#20262E;
+    --mono:"Cascadia Mono","JetBrains Mono","Consolas","Courier New",monospace;
+    --sans:"Segoe UI",system-ui,-apple-system,sans-serif;
+  }
+  @media(prefers-color-scheme:light){
+    :root:not([data-theme="dark"]){
+      --ink:#F4F5F7; --panel:#FFFFFF; --panel2:#EEF0F3; --rule:#D2D8E0;
+      --fg:#1A1F26; --fg-dim:#5A626E; --fg-faint:#8B94A1;
+      --accent:#A96810; --accent-soft:rgba(169,104,16,.10);
+      --ok:#2F7D3F; --danger:#B23A37;
+      --grid-line:#E2E6EC;
+    }
+  }
+  :root[data-theme="light"]{
+    --ink:#F4F5F7; --panel:#FFFFFF; --panel2:#EEF0F3; --rule:#D2D8E0;
+    --fg:#1A1F26; --fg-dim:#5A626E; --fg-faint:#8B94A1;
+    --accent:#A96810; --accent-soft:rgba(169,104,16,.10);
+    --ok:#2F7D3F; --danger:#B23A37;
+    --grid-line:#E2E6EC;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ink); color:var(--fg);
+    font-family:var(--sans); font-size:15px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:980px; margin:0 auto; padding:40px 20px 80px}
+
+  /* ===== page header ===== */
+  .eyebrow{font-family:var(--mono); font-size:11px; letter-spacing:.18em;
+    text-transform:uppercase; color:var(--fg-faint); margin:0 0 6px}
+  h1{font-family:var(--mono); font-weight:600; font-size:clamp(26px,4.4vw,38px);
+    line-height:1.12; margin:0 0 10px; letter-spacing:-.01em; text-wrap:balance}
+  .lede{color:var(--fg-dim); max-width:62ch; margin:0 0 18px; font-size:15.5px}
+  .legend{display:flex; flex-wrap:wrap; gap:14px; font-family:var(--mono);
+    font-size:11px; letter-spacing:.06em; color:var(--fg-dim); text-transform:uppercase}
+  .legend b{font-weight:600}
+  .dot{display:inline-block; width:9px; height:9px; border-radius:2px;
+    margin-right:6px; vertical-align:1px}
+  .dot.must{background:var(--accent)}
+  .dot.sugg{background:transparent; border:1.5px solid var(--fg-dim); width:7px;height:7px}
+  .dot.die{background:var(--danger)}
+
+  /* ===== section ===== */
+  .sec{margin-top:46px}
+  .sec-h{display:flex; align-items:baseline; gap:12px; margin-bottom:16px;
+    border-bottom:1px solid var(--rule); padding-bottom:10px}
+  .sec-h h2{font-family:var(--mono); font-size:15px; font-weight:600;
+    letter-spacing:.04em; margin:0; text-transform:uppercase}
+  .sec-h .n{font-family:var(--mono); color:var(--accent); font-size:13px}
+  .sec-h .sub{color:var(--fg-faint); font-size:12.5px; margin-left:auto;
+    font-family:var(--mono); letter-spacing:.04em}
+
+  /* ===== timeline ===== */
+  .tl{display:grid; grid-template-columns:repeat(6,1fr); gap:0;
+    border:1px solid var(--rule); border-radius:6px; overflow:hidden;
+    background:var(--panel)}
+  .tl-node{padding:12px 12px 14px; border-right:1px solid var(--rule); position:relative}
+  .tl-node:last-child{border-right:0}
+  .tl-node::before{content:""; position:absolute; top:0; left:0; right:0; height:3px;
+    background:var(--fg-faint)}
+  .tl-node.k::before{background:var(--accent)}
+  .tl-node .st{font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--fg-faint); margin:0 0 6px}
+  .tl-node .nm{font-weight:600; font-size:13px; margin:0 0 6px; line-height:1.3}
+  .tl-node .who{font-family:var(--mono); font-size:10.5px; color:var(--fg-dim);
+    line-height:1.45}
+  @media(max-width:760px){.tl{grid-template-columns:1fr 1fr}
+    .tl-node{border-right:1px solid var(--rule); border-bottom:1px solid(var(--rule))}}
+
+  /* ===== cpu grid ===== */
+  .cpu{display:grid; grid-template-columns:repeat(5,1fr); gap:6px; margin-top:4px}
+  .cell{background:var(--panel); border:1px solid var(--rule); border-radius:5px;
+    padding:8px 6px; min-height:62px; display:flex; flex-direction:column;
+    justify-content:flex-start; gap:2px}
+  .cell .id{font-family:var(--mono); font-size:12px; font-weight:700; color:var(--fg-dim)}
+  .cell .rl{font-size:10px; line-height:1.25; color:var(--fg-dim)}
+  .cell.hk{background:var(--panel2)}
+  .cell.iso{border-color:var(--accent); border-style:dashed}
+  .cell.rt{background:var(--accent-soft); border:1px solid var(--accent)}
+  .cell.rt .id{color:var(--accent)}
+  .cell.nav{border-color:var(--fg-dim)}
+  .cpu-key{display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-family:var(--mono);
+    font-size:10.5px; color:var(--fg-dim); letter-spacing:.04em}
+  .sw{display:inline-block; width:12px;height:12px; border-radius:3px; margin-right:5px; vertical-align:-1px}
+
+  /* ===== filter bar ===== */
+  .bar{display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px}
+  .tab{font-family:var(--mono); font-size:11.5px; letter-spacing:.05em;
+    text-transform:uppercase; padding:5px 11px; border-radius:4px;
+    border:1px solid var(--rule); background:var(--panel); color:var(--fg-dim);
+    cursor:pointer; transition:color .12s, border-color .12s, background .12s}
+  .tab:hover{color:var(--fg)}
+  .tab.on{color:var(--accent); border-color:var(--accent); background:var(--accent-soft)}
+  .bar .act{margin-left:auto; font-family:var(--mono); font-size:11px;
+    color:var(--fg-faint); cursor:pointer; letter-spacing:.05em; text-transform:uppercase}
+  .bar .act:hover{color:var(--fg-dim)}
+
+  /* ===== cards ===== */
+  .group{margin-bottom:22px}
+  .group-h{font-family:var(--mono); font-size:12px; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--fg-faint); margin:0 0 8px; display:flex; gap:8px; align-items:center}
+  .group-h::after{content:""; flex:1; height:1px; background:var(--rule)}
+  .cards{display:grid; grid-template-columns:1fr; gap:8px}
+  details.card{background:var(--panel); border:1px solid var(--rule); border-radius:6px;
+    overflow:hidden; transition:border-color .12s}
+  details.card[open]{border-color:var(--fg-faint)}
+  details.card>summary{list-style:none; cursor:pointer; padding:11px 14px;
+    display:flex; align-items:center; gap:10px; user-select:none}
+  details.card>summary::-webkit-details-marker{display:none}
+  details.card>summary::before{content:"+"; font-family:var(--mono); color:var(--fg-faint);
+    font-size:14px; width:12px; flex-shrink:0; transition:transform .15s}
+  details.card[open]>summary::before{content:"–"}
+  .pcode{font-family:var(--mono); font-size:13px; font-weight:600; color:var(--fg);
+    flex-shrink:0; min-width:0}
+  .pcode .v{color:var(--accent)}
+  .chip{font-family:var(--mono); font-size:9.5px; letter-spacing:.08em;
+    text-transform:uppercase; padding:2px 7px; border-radius:3px; flex-shrink:0;
+    border:1px solid var(--rule); color:var(--fg-faint); background:var(--panel2)}
+  .chip.must{color:var(--accent); border-color:var(--accent); background:var(--accent-soft)}
+  .chip.die{color:var(--danger); border-color:var(--danger); background:rgba(217,83,79,.10)}
+  .role{color:var(--fg-dim); font-size:13px; flex:1; min-width:0}
+  .detail{padding:0 14px 13px 38px; color:var(--fg-dim); font-size:13.5px; line-height:1.62}
+  .detail p{margin:0 0 8px}
+  .detail p:last-child{margin:0}
+  .detail .k{font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; color:var(--fg); margin-right:8px; font-weight:600}
+  .detail .k.bad{color:var(--danger)}
+  .detail .k.fix{color:var(--accent)}
+  .detail ul{margin:4px 0 8px; padding-left:18px}
+  .detail li{margin-bottom:3px}
+  .detail code{font-family:var(--mono); font-size:12px; background:var(--panel2);
+    padding:1px 5px; border-radius:3px; color:var(--fg)}
+  .detail .warn-line{border-left:2px solid var(--accent); padding-left:10px; margin-top:6px;
+    font-size:12.5px}
+
+  .note{background:var(--panel); border:1px solid var(--rule); border-left:3px solid var(--accent);
+    border-radius:5px; padding:12px 14px; font-size:13px; color:var(--fg-dim); line-height:1.6}
+  .note b{color:var(--fg)}
+  .note code{font-family:var(--mono); font-size:12px; background:var(--panel2);
+    padding:1px 5px; border-radius:3px; color:var(--fg)}
+
+  .foot{margin-top:46px; padding-top:16px; border-top:1px solid var(--rule);
+    font-family:var(--mono); font-size:11px; color:var(--fg-faint); letter-spacing:.04em}
+  .foot a{color:var(--fg-dim)}
+  @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <p class="eyebrow">F1 minipc · Intel i7-12800H · Ubuntu 22.04 + PREEMPT_RT</p>
+  <h1>实时调优速查</h1>
+  <p class="lede">两条 1kHz 硬实时循环（EtherCAT IO <b>SCHED_FIFO:90</b> / RL 控制 <b>SCHED_FIFO:80</b>）要稳，靠三层把 CPU 4-7 这 4 个隔离核"独占、不被打断、行为可预测"。下面是生效时序、CPU 布局、和每个参数的"是什么/原理/后果"。点卡片展开。</p>
+
+  <div class="legend">
+    <span><span class="dot must"></span><b>必须</b> 实时性成立前提</span>
+    <span><span class="dot sugg"></span><b>建议</b> 减噪增益</span>
+    <span><span class="dot die"></span><b>die</b> 不满足直接退出</span>
+  </div>
+
+  <!-- ===== 时序 ===== -->
+  <section class="sec">
+    <div class="sec-h">
+      <span class="n">01</span><h2>生效时序</h2>
+      <span class="sub">从按下电源到 aimrt_main 跑起来</span>
+    </div>
+    <div class="tl">
+      <div class="tl-node k"><p class="st">① GRUB 引导</p><p class="nm">12 内核参数</p><p class="who">isolcpus / nohz_full / rcu_nocbs / irqaffinity / intel_pstate / cstate=0 / tsc …<br>内核层·开机即定</p></div>
+      <div class="tl-node k"><p class="st">② 内核 init</p><p class="nm">irqaffinity 早期兜底</p><p class="who">新设备中断默认落管家核，早于任何 systemd 服务</p></div>
+      <div class="tl-node"><p class="st">③ systemd 早期</p><p class="nm">禁 THP 服务</p><p class="who">f1-rt-disable-thp.service<br>Before=basic.target 堵覆盖</p></div>
+      <div class="tl-node k"><p class="st">④ f1-rt-setup</p><p class="nm">governor / IRQ / ethtool</p><p class="who">performance / boost=0 / NVMe→0 / USB→8 / EtherCAT→0</p></div>
+      <div class="tl-node"><p class="st">⑤ udev</p><p class="nm">governor 持久化</p><p class="who">CPU 热插拔回填 performance，与④互为兜底</p></div>
+      <div class="tl-node k"><p class="st">⑥ motion-control</p><p class="nm">aimrt_main 起飞</p><p class="who">ecat_io_loop→CPU4 FIFO:90<br>rl_control→CPU6 FIFO:80</p></div>
+    </div>
+  </section>
+
+  <!-- ===== CPU 拓扑 ===== -->
+  <section class="sec">
+    <div class="sec-h">
+      <span class="n">02</span><h2>CPU 拓扑</h2>
+      <span class="sub">i7-12800H · 6P+8E · 20 逻辑线程</span>
+    </div>
+    <div class="cpu" id="cpu"></div>
+    <div class="cpu-key">
+      <span><span class="sw" style="background:var(--panel2);border:1px solid var(--rule)"></span>管家核 0-3</span>
+      <span><span class="sw" style="background:var(--accent-soft);border:1px solid var(--accent)"></span>★ 实时核 4-7（隔离）</span>
+      <span><span class="sw" style="background:var(--panel);border:1px solid var(--fg-dim)"></span>导航核 8</span>
+      <span><span class="sw" style="background:var(--panel);border:1px solid var(--rule)"></span>大脑/其余 9-19</span>
+    </div>
+    <p style="font-size:12.5px;color:var(--fg-dim);margin-top:12px;line-height:1.6">
+      隔离 <code style="font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:3px">4,5,6,7</code> 而非只 <code style="font-family:var(--mono);background:var(--panel2);padding:1px 5px;border-radius:3px">4,6</code>：4/5 是物理核 P2 的两个超线程，<b>共享 L1/L2、执行单元、store buffer</b>，只隔离 4 不隔离 5，普通线程跑 5 上仍抢这些资源、驱逐实时热数据 → 周期性延迟尖峰。故必须隔离整颗物理核含 sibling。
+    </p>
+  </section>
+
+  <!-- ===== 参数矩阵 ===== -->
+  <section class="sec">
+    <div class="sec-h">
+      <span class="n">03</span><h2>参数速查</h2>
+      <span class="sub">点开看 · 是什么 / 原理 / 后果</span>
+    </div>
+    <div class="bar">
+      <button class="tab on" data-f="all">全部</button>
+      <button class="tab" data-f="kernel">内核层</button>
+      <button class="tab" data-f="os">OS 层</button>
+      <button class="tab" data-f="boot">启动层</button>
+      <span class="act" id="expandAll">展开全部</span>
+    </div>
+
+    <div id="matrix">
+
+      <!-- preflight + RT 内核 -->
+      <div class="group" data-layer="kernel">
+        <p class="group-h">前提 · preflight + RT 内核</p>
+        <div class="cards">
+          <details class="card" data-prio="die" data-layer="kernel">
+            <summary><span class="pcode">preflight()</span><span class="chip die">die</span><span class="role">分层预检，不是"不符都 warn"</span></summary>
+            <div class="detail">
+              <p><span class="k">die 硬阻断</span>非 root · 非 x86_64 · 检测到 VM（生产硬实时在 VM 无意义，直接退，不给"勉强继续"选项）· <b>Ubuntu 非 22.04</b></p>
+              <p><span class="k">die 三重校验</span><b>型号 i7-12800H</b>（<code>model name</code>）· <b><code>nproc</code>=20</b> · <b>14 物理核</b>（<code>lscpu -p=CORE</code> 去重）——任一不符即中止，因 <code>isolcpus=4,5,6,7</code> 按该拓扑写死（原"Ubuntu 非 22.04 / nproc≠20 只 warn"已改为 die）</p>
+              <p><span class="k">自动补齐</span>缺 <code>python3</code>/<code>ethtool</code> 则 <code>apt install</code></p>
+              <p class="warn-line">对照 <code>realtime-config.sh</code>：它对 VM 是 <code>warn + ask_yn</code> 交互询问；本脚本更严，直接 die。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">step_ubuntu_pro_rt</span><span class="chip must">必须</span><span class="role">RT 内核：检测+安装（三阶段）</span></summary>
+            <div class="detail">
+              <p><span class="k">① 已运行则跳过</span>已是 RT 内核（<code>uname -v</code>/<code>-r</code> 含 RT）→ 跳过安装。但 detach 不卸载内核包，故仍查订阅：未 <code>attached</code> 则 <code>warn</code> 提醒（<b>场景2</b>：内核在跑、实时控制正常，仅失去官方更新补丁，提供 token 重跑即重新 attach）。</p>
+              <p><span class="k">② Pro attach</span>已 attached 则跳过；否则读 <code>/etc/f1/pro_token</code>（0600 root:root），文件缺失/为空则交互输入并回写（<b>仅交互输入的 token 回写</b>，从文件读的不重复写）。不依赖 <code>UBUNTU_PRO_TOKEN</code> 环境变量，可安全推 GitHub。</p>
+              <p><span class="k">③ enable</span>realtime-kernel 未 enabled 则 <code>pro enable realtime-kernel --assume-yes</code> 直接装（<b>不再 ask_yn</b>）。</p>
+              <p><span class="k">为什么</span>所有后续配置（GRUB/sysctl/systemd）都必须在 RT 内核上才真正生效。原版"未装只 warn"会让人误以为配置完成，实则内核未就绪。</p>
+              <p><span class="k">装不上不 die</span>attach/enable 失败只 warn + return 0——GRUB 等对 RT 内核同样需要，先写无害，用户后续手动装+重启即可。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- GRUB -->
+      <div class="group" data-layer="kernel">
+        <p class="group-h">内核层 · GRUB 命令行（12 项，drop-in 写入）</p>
+        <div class="cards">
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">isolcpus=<span class="v">4,5,6,7</span></span><span class="chip must">必须</span><span class="role">把 4 个实时核从调度器摘出</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>内核启动时把这组 CPU 移出默认调度域，普通进程（ROS2/DDS/日志）永远调不到，只有显式绑核的线程能上。</p>
+              <p><span class="k">原理</span>4/5 是同一物理核的两个超线程，共享 L1/L2、执行单元、store buffer；只隔离 4 不隔离 5，普通线程仍抢共享资源、驱逐热数据 → 周期性尖峰。</p>
+              <p><span class="k bad">不这么</span>后台线程调度上实时核，1kHz 尾部延迟不可控。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">nohz_full=<span class="v">4,5,6,7</span></span><span class="chip must">必须</span><span class="role">关隔离核周期性 tick</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>Linux 默认每 CPU 每秒 <code>HZ</code> 次（22.04 约 250）"调度 tick"做时间统计/检查切换。<code>nohz_full</code> 让"只剩一个线程"的核进 <b>full dynticks</b> 模式，关掉这个周期 tick。</p>
+              <p><span class="k">原理</span>即使 isolcpus 不让普通线程上核，内核仍按时给实时核发 tick。一次 tick 本身开销 + 调度决策，对 1ms（1000μs）周期是<b>数十 μs 抖动</b>。</p>
+              <p><span class="k">前提</span>需配合 <code>rcu_nocbs</code>，且隔离核上只剩目标线程。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">rcu_nocbs=<span class="v">4,5,6,7</span></span><span class="chip must">必须</span><span class="role">RCU 回调迁管家核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>RCU（Read-Copy-Update）是内核免锁同步，读端极快，但"延迟回收旧数据"的回调默认在提交它的 CPU 上执行。<code>rcu_nocbs</code> 让隔离核的 RCU 回调<b>转到管家核执行</b>。</p>
+              <p><span class="k">为什么</span>回调不频繁，但一旦命中实时循环关键时刻就是不可预测 μs 级抖动。</p>
+              <p><span class="k fix">排除</span><code>rcu_nocb_poll</code>——它让管家核开轮询线程主动拉取，常驻干扰大脑（导航）CFS 调度，故不加。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">irqaffinity=<span class="v">0-3,8-19</span></span><span class="chip must">必须·新增</span><span class="role">开机最早期中断默认落脚核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><b>内核命令行参数</b>，引导阶段就设"默认中断亲和性"——新设备中断注册（USB 网卡/NVMe 开机枚举）时按掩码决定落哪个 CPU。</p>
+              <p><span class="k">为什么必须早</span>它在 init / 任何 systemd 服务<b>之前</b>生效。运行时 <code>set_rt_env.sh</code> 的 <code>default_smp_affinity</code> 是 systemd 阶段才写，<b>晚于开机设备枚举</b>。两者形成"早期兜底（GRUB）+ 精确兜底（运行时动态计算）"两层。</p>
+              <p><span class="k bad">不这么</span>开机早期注册的中断默认落 4-7 污染隔离核，等运行时改已晚（部分中断已服务过）。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">intel_pstate=disable</span><span class="chip must">必须</span><span class="role">禁动态调频，改 acpi-cpufreq</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>intel_pstate</code> 是 Intel 硬件 P-state 驱动，频率随负载变。禁后改 <code>acpi-cpufreq</code> + <code>performance</code> governor 固定最高频。</p>
+              <p><span class="k">为什么</span>动态调频 → 同一周期执行时间不稳 → 直接体现为周期抖动。固定最高频后每周期一致。</p>
+              <p><span class="k">副作用</span>功耗/发热升（F1 有主动散热，可接受）。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">processor/intel_idle.max_cstate=0</span><span class="chip must">必须</span><span class="role">禁 CPU 深度睡眠</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>CPU 空闲逐级进 C0→C1→C2… 越深越省电但唤醒延迟越大越不可预测。<code>=0</code> 只允许 C0（活跃），不进任何睡眠。</p>
+              <p><span class="k">原理</span>实时线程 1ms 间隔若让 CPU 浅睡再唤醒，唤醒延迟（数十 μs）叠加到周期。用功耗换可预测延迟。</p>
+              <p><span class="k">注意</span>因 pstate 禁 + performance 已拉满，CPU 大部分时间本在 C0，此项主要堵空闲瞬间的深度睡眠。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">watchdog_thresh=60</span><span class="chip must">必须</span><span class="role">调低 NMI 看门狗频率</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>NMI（不可屏蔽中断）watchdog 是内核检测 CPU 卡死/死锁的机制，定期发不可屏蔽中断检查响应。默认 10 秒一次，<code>watchdog_thresh=60</code> 拉到 60 秒一次（NMI 从每秒一次降到每分钟一次）。</p>
+              <p><span class="k">为什么</span>默认 NMI 每秒一次是周期性干扰源。完全关掉会丢失 CPU 卡死时的 backtrace 诊断能力。拉长到 60 秒既把干扰降到几乎为零，又保留卡死现场记录——执行器安全系统需要事后可查。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">audit=0</span><span class="chip must">必须</span><span class="role">关 audit 安全审计</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>Linux audit 记录系统调用/文件访问等安全事件，默认开启维护审计缓冲区、产生后台工作。</p>
+              <p><span class="k">为什么</span>F1 封闭控制场景不需审计；后台工作是额外噪声，关掉。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">tsc=reliable + clocksource=tsc</span><span class="chip must">必须</span><span class="role">固定时钟源为 TSC</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>内核时钟源可选 TSC/HPET/ACPI_PM。<code>tsc</code> 是 CPU 内计数器，读取最快（一条指令，纳秒级）；HPET 是主板外置定时器，跨总线慢。<code>clocksource=tsc</code> 强制用 TSC，<code>tsc=reliable</code> 告诉内核"TSC 稳定可信，不用校验切换"。</p>
+              <p><span class="k">为什么</span>时钟源切换/校验瞬间有计时跳变。固定后基准稳定，cyclictest 等延迟测量也基于它。</p>
+              <p><span class="k">前提</span>i7-12800H 的 TSC 在 C-state 下保持同步（现代 Intel 默认如此），<code>reliable</code> 安全。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="kernel">
+            <summary><span class="pcode">transparent_hugepage=never</span><span class="chip must">必须</span><span class="role">禁透明大页 THP</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>THP 是内核把 4KB 小页自动合并成 2MB 大页的机制，减页表项、提升 TLB 命中。但合并/拆分是异步后台动作。</p>
+              <p><span class="k">为什么</span>合并/拆分瞬间页表抖动、TLB 刷新，对实时线程 μs 级噪声。禁后内存页固定可预测。</p>
+              <p><span class="k">双保险</span>与 §启动层 THP 禁用服务两层——GRUB 层 + 服务层，任一生效即可。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- OS 层 -->
+      <div class="group" data-layer="os">
+        <p class="group-h">OS 层 · sysctl / swap / irqbalance / THP</p>
+        <div class="cards">
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">sched_rt_runtime_us=<span class="v">-1</span></span><span class="chip">建议</span><span class="role">解除 RT 调度 95% 节流</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>内核默认给 SCHED_FIFO/RR 设"95% 时间上限"——RT 任务连续占用超配额则强制降级 5% 防锁死系统（安全网）。</p>
+              <p><span class="k">为什么</span>隔离核上就是要让 EtherCAT/Control 100% 占用、绝不让出。<code>=-1</code> 关闭节流。</p>
+              <p><span class="k bad">不设</span>实时线程偶尔被强制让出 5%，尾部不可预测抖动。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">timer_migration=<span class="v">0</span></span><span class="chip">建议</span><span class="role">禁止定时器跨核迁移</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>内核定时器到期回调默认可跨 CPU 迁移执行。<code>=0</code> 禁止，在哪个核到期就在哪执行。</p>
+              <p><span class="k">为什么</span>跨核迁移触发出入队列、缓存污染。不让外部定时器迁进隔离核，也不让管家核定时器迁到实时核。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">numa_balancing=<span class="v">0</span></span><span class="chip">建议</span><span class="role">关自动 NUMA 均衡</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>多 NUMA 机器上内核自动把内存迁到离 CPU 近的节点。F1 单 NUMA（i7-12800H 单封装），无收益。</p>
+              <p><span class="k">为什么</span>单 NUMA 关掉，避免后台扫描页表、产生不必要唤醒和迁移。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">vm.stat_interval=<span class="v">10</span></span><span class="chip">建议</span><span class="role">拉长 vmstat 统计间隔</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>vmstat</code> 后台周期性统计内存状态，默认每秒多次。<code>=10</code> 拉到 10 秒。</p>
+              <p><span class="k">为什么</span>统计唤醒 CPU、扫页表。拉长间隔减唤醒频率，降后台噪声。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">rtprio / memlock</span><span class="chip">已取消</span><span class="role">无需为非 root 用户配 limits</span></summary>
+            <div class="detail">
+              <p><span class="k">已取消</span>控制服务以 root（<code>sudo</code>）运行，<code>pthread_setschedparam</code>/<code>mlockall</code> 在 root 下不受 PAM <code>rtprio</code>/<code>memlock</code> 限制约束；PAM limits 只在用户登录会话生效，systemd 服务以 root 启动不经过 <code>pam_limits</code>。故不再写 <code>f1-realtime.conf</code>，也不建 <code>f1rt</code> 组。</p>
+              <p><span class="k">真正前提</span>代码层 <code>pthread_setschedparam</code> 返回值检查（<code>!= 0</code>）才是实时调度生效的关键（见代码层 C1/C2），权限配错会被 <code>&lt;0</code> bug 吞掉 → <b>假实时</b>。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="os">
+            <summary><span class="pcode">swapoff + 注释 fstab</span><span class="chip must">必须</span><span class="role">关闭 swap</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>swap 是内核把"不活跃"内存页写到磁盘（swap 分区/文件）腾物理内存，需要时读回（换入）。</p>
+              <p><span class="k">原理</span>实时线程页若换出，访问触发<b>缺页中断</b>，内核从磁盘读回，I/O 延迟 <b>ms 级</b>远超 1ms。即便内存够用，swap 开着极端情况仍可能换出。</p>
+              <p><span class="k">为什么关两次</span><code>swapoff -a</code> 运行时关，但重启后 fstab 挂 swap 会重启用；注释 fstab 行永久关。两层才彻底。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">disable + mask irqbalance</span><span class="chip">建议</span><span class="role">停用并 mask 中断均衡守护</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>irqbalance</code> 是系统守护进程，默认每 10s 统计各 CPU 中断负载并<b>自动重分配中断</b>（均衡/省电）。</p>
+              <p><span class="k">为什么冲突</span>我们手动把 NVMe→0、USB→8、EtherCAT→0、默认掩码设管家核，目的就是让中断远离 4-7。但 irqbalance 每 10s 会<b>覆盖重排</b>，可能把中断路由回隔离核，前功尽弃。</p>
+              <p><span class="k">mask 非 disable</span><code>disable</code> 包更新可能重 enable；<code>mask</code> 软链 <code>/dev/null</code>，任何启动尝试永久拒绝。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="os">
+            <summary><span class="pcode">f1-rt-disable-thp.service</span><span class="chip">建议</span><span class="role">服务层禁 THP（双保险）</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>独立 systemd oneshot，<code>Before=basic.target</code> 早期 <code>echo never</code> 到 <code>enabled</code> 和 <code>defrag</code>。</p>
+              <p><span class="k">为什么 GRUB 已设还做</span>部分发行版 init/tuned/cloud-init 会在启动后期重写 <code>always</code>/<code>madvise</code> 覆盖；服务层在它们之前再写 <code>never</code> 堵覆盖路径。<code>defrag</code> 与 THP 是独立开关，需单独写。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 启动层 set_rt_env -->
+      <div class="group" data-layer="boot">
+        <p class="group-h">启动层 · set_rt_env.sh（8 步，开机经 f1-rt-setup.service 调用）</p>
+        <div class="cards">
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">① governor=performance</span><span class="chip must">必须</span><span class="role">全核固定最高频</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>scaling_governor</code> 是 cpufreq 给每核选的调频策略。常见 performance（固定最高）/powersave/schedutil（按负载动态）。<code>performance</code> 固定最高频。</p>
+              <p><span class="k">为什么</span>即使禁了 intel_pstate，governor 若仍动态档频率会摆动，周期执行时间不一致。</p>
+              <p><span class="k">全核</span>管家核也固定，避免后台频率切换产生额外抖动。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">② echo 0 &gt; cpufreq/boost</span><span class="chip must">必须</span><span class="role">禁睿频 Turbo Boost</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>睿频是 Intel CPU 让单核临时超标称最高频的机制。<code>cpufreq/boost</code> 是 ACPI cpufreq 总开关，<code>0</code> 关闭。</p>
+              <p><span class="k">为什么禁</span>睿频频率随温度/负载变，同一周期频率波动 → 执行时间波动 → 抖动。固定标称最高频，可预测。</p>
+              <p><span class="k">用 boost 非 no_turbo</span>因 <code>intel_pstate=disable</code>，<code>intel_pstate/no_turbo</code> 节点不存在；改用 <code>acpi-cpufreq</code> 的 <code>boost</code>。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">③ default_smp_affinity 兜底</span><span class="chip must">必须</span><span class="role">运行时精确兜底新中断默认核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>/proc/irq/default_smp_affinity</code> 是"新中断默认落脚 CPU 掩码"，热插拔设备注册时按掩码分配。</p>
+              <p><span class="k">与 GRUB 两层</span>GRUB <code>irqaffinity=</code> 早期兜底（见内核层）；此处 systemd 阶段按<b>实际在线 CPU 动态计算</b>，拓扑与预期不符仍能正确排除隔离核。</p>
+              <p><span class="k">fallback</span>python 失败兜底 <code>fff0f</code> = CPU 0-3 + 8-11。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">④ NVMe 队列 → CPU 0</span><span class="chip must">必须</span><span class="role">NVMe 中断移出实时核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>NVMe SSD I/O 完成通过多队列中断通知，i7-12800H 上每队列一 MSI-X 中断，默认分散多 CPU。</p>
+              <p><span class="k">为什么</span>非 kHz 热路径，但分散到 4-7 污染隔离核。统一迁 CPU 0 让隔离核干净。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">⑤ xHCI/r8152 → CPU 8</span><span class="chip must">必须·关键修正</span><span class="role">USB 网卡(含 Livox)中断绑导航核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>xHCI</code> 是 USB 3.0 主控驱动，<code>r8152</code> 是 RTL8153 USB 网卡（Livox MID-360 雷达用）驱动。收发中断走 xHCI MSI-X，非独立网卡中断。</p>
+              <p><span class="k">为什么 CPU 8</span>Livox 10Hz 数据不大需稳定，CPU 8 导航核不在隔离集、也不和 EtherCAT 抢 CPU 0。</p>
+              <p class="warn-line"><span class="k fix">关键修正</span><code>smp_affinity</code> 按<b>十六进制</b>解析，CPU 8 = bit 8 = <code>0x100</code>。原 md 写 <code>echo 256</code>（十进制 256 字符串）被内核按十六进制解析成 <code>0x256=598=CPU{1,2,4,6,9}</code>，<b>直接污染隔离核 4/6</b>。已修正为 <code>echo 100</code>（<code>0x100</code>=CPU 8）。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">⑥ EtherCAT 网卡 → CPU 0</span><span class="chip must">必须</span><span class="role">EtherCAT 硬中断落管家核</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span><code>enp2s0</code>（Intel igc 板载）是 EtherCAT 物理载体。SOEM 主站 1kHz 主动轮询，每次收发一帧，网卡硬中断在收发完成时触发。</p>
+              <p><span class="k">为什么 CPU 0</span>SOEM 是主动轮询模型，实时性由隔离核 <code>ecat_io_loop</code> 保证，网卡硬中断只需快速应答。落管家核 CPU 0 不抢隔离核，硬中断不进实时核，周期不被打断。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="boot">
+            <summary><span class="pcode">⑦ ethtool 网卡调优</span><span class="chip">建议·保险</span><span class="role">关省电/聚合，1kHz 收发路径最可预测</span></summary>
+            <div class="detail">
+              <p><span class="k">逐子项</span></p>
+              <ul>
+                <li><code>-G rx 128 tx 128</code> — 设收/发环形队列长 128。太短突发帧丢；128 够覆盖 1kHz 突发。</li>
+                <li><code>-K gro/gso/tso/lro/rxvlan/txvlan off</code> — 关硬件卸载。gro/gso/tso 把多帧合并大包再交 CPU，合并有延迟；lro 类似且对实时有害；vlan 对 EtherCAT 裸帧无意义。关掉让每帧独立及时交 CPU。</li>
+                <li><code>-C adaptive-rx/tx off, rx-usecs 0 tx-usecs 0</code> — 关自适应中断聚合。网卡默认攒帧攒段时间再发中断（省中断数加延迟）。<code>rx-usecs 0</code>=收到帧立即发中断，1kHz 不能等。</li>
+                <li><code>-A rx/tx off</code> — 关收/发流控（pause frame）。流控让对端"等一下"，对主从同步有害。</li>
+                <li><code>-A autoneg off</code>（<b>默认关，需现场验证</b>）— 关自动协商强制速率双工。<b>风险</b>：对端未固定速率则链路协商失败、WKC 丢。仅链路已 autoneg on 稳定验证 WKC 后再手动开。</li>
+                <li><code>ip link set txqueuelen 100</code> — 发送队列长 100，避免排队延迟。</li>
+              </ul>
+            </div>
+          </details>
+          <details class="card" data-prio="must" data-layer="boot">
+            <summary><span class="pcode">⑧ swap 兜底</span><span class="chip must">必须</span><span class="role">运行时再确认 swap 已关</span></summary>
+            <div class="detail">
+              <p><span class="k">是什么</span>见 OS 层 swap 卡。此处开机再 <code>swapon --show</code> 检查一次，若仍激活（fstab 恢复/手动 swapon）则 <code>swapoff -a</code>。双保险。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <!-- 排除项 -->
+      <div class="group" data-layer="kernel">
+        <p class="group-h">明确排除 · 不做的项及理由</p>
+        <div class="cards">
+          <details class="card" data-prio="sugg" data-layer="kernel">
+            <summary><span class="pcode">mce=off</span><span class="chip">排除</span><span class="role">不关硬件故障上报</span></summary>
+            <div class="detail">
+              <p><span class="k">为什么不做</span>MCE（Machine Check Exception）是 CPU 硬件故障上报。执行器是安全系统，<b>不应关闭硬件告警</b>——真出硬件问题要能知道。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="kernel">
+            <summary><span class="pcode">nosmt</span><span class="chip">排除</span><span class="role">不砍超线程</span></summary>
+            <div class="detail">
+              <p><span class="k">为什么不做</span><code>nosmt</code> 禁用全部超线程。但大脑（导航）需要全部线程算力，砍掉超线程=砍大脑。靠 isolcpus 精确隔离实时核即可，不必全局禁 SMT。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="kernel">
+            <summary><span class="pcode">idle=poll</span><span class="chip">排除</span><span class="role">不让 CPU 空转 100%</span></summary>
+            <div class="detail">
+              <p><span class="k">为什么不做</span><code>idle=poll</code> 让隔离核空闲时死循环不进睡眠，延迟最低但<b>热失控</b>（CPU 永远 100% 发热）。F1 用 cstate=0 + performance 已够，不值得冒热风险。</p>
+            </div>
+          </details>
+          <details class="card" data-prio="sugg" data-layer="kernel">
+            <summary><span class="pcode">rcu_nocb_poll</span><span class="chip">排除</span><span class="role">不让管家核常驻轮询</span></summary>
+            <div class="detail">
+              <p><span class="k">为什么不做</span>它让管家核开 RCU 轮询线程主动拉取回调，延迟更低但<b>常驻一个轮询线程干扰大脑（导航）CFS 调度</b>。大脑也要跑得好，不能为小脑的边际增益牺牲它。</p>
+            </div>
+          </details>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 验收锚点 -->
+  <section class="sec">
+    <div class="sec-h">
+      <span class="n">04</span><h2>验收一句话</h2>
+      <span class="sub">重启后核对</span>
+    </div>
+    <div class="note">
+      <p style="margin:0 0 8px"><b>内核</b>：<code>uname -r</code> 含 <code>-realtime</code>；<code>cat /proc/cmdline</code> 含 <code>isolcpus=4,5,6,7</code> / <code>nohz_full</code> / <code>rcu_nocbs</code> / <code>irqaffinity=0-3,8-19</code>。</p>
+      <p style="margin:0 0 8px"><b>OS</b>：全核 <code>scaling_governor=performance</code>；<code>swapon --show</code> 空；<code>sysctl kernel.sched_rt_runtime_us</code>=<code>-1</code>（RT 权限不查 ulimit——控制服务以 root 运行，不受 PAM rtprio/memlock 约束）。</p>
+      <p style="margin:0 0 8px"><b>线程</b>：<code>ps -T -p $(pidof aimrt_main) -o tid,comm,cls,rtprio,psr</code> → <code>ecat_io_loop</code> 为 <code>FF:90</code> 在 CPU4，<code>rl_control_pub_thread</code> 为 <code>FF:80</code> 在 CPU6，其余 <code>TS</code>。</p>
+      <p style="margin:0"><b>延迟</b>：<code>sudo cyclictest -l 100000 -m -Sp90 -p99 -h400 -q</code>，最大延迟 &lt; 100μs（同机负载）。</p>
+    </div>
+  </section>
+
+  <!-- 代码修改日志 -->
+  <section class="sec">
+    <div class="sec-h">
+      <span class="n">05</span><h2>代码修改日志</h2>
+      <span class="sub">已完成 + 待办</span>
+    </div>
+
+    <!-- 已完成 -->
+    <div class="group">
+      <p class="group-h">✅ 已完成 · 4 项代码修改</p>
+      <div class="cards">
+
+        <details class="card">
+          <summary><span class="pcode">ecat_io_loop 绑核修正</span><span class="chip must">已合入</span><span class="role">dcu_x1.yaml · bind_cpu <span class="v">9→4</span></span></summary>
+          <div class="detail">
+            <p><span class="k">文件</span><code>module/dcu_driver_module/cfg/dcu_x1.yaml</code></p>
+            <p><span class="k">改动</span><code>bind_cpu: 9</code> → <code>bind_cpu: 4</code>。CPU 4 是隔离核 P2 的主线程，EtherCAT 1kHz 硬实时循环独占此核。</p>
+            <p><span class="k">原因</span>CPU 9 是 E-core（能效核），频率低、延迟高，不适合 1kHz 硬实时。</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="pcode">rl_control_pub 实时配置</span><span class="chip must">已合入</span><span class="role">rl_x1.yaml / rl_x1_sim.yaml · 新增 rt_priority + bind_cpu</span></summary>
+          <div class="detail">
+            <p><span class="k">文件</span><code>module/control_module/cfg/rl_x1.yaml</code>、<code>rl_x1_sim.yaml</code></p>
+            <p><span class="k">新增</span><code>rt_priority: 80</code>（SCHED_FIFO 优先级）、<code>bind_cpu: 6</code>（隔离核 P3 主线程）</p>
+            <p><span class="k">配合</span><code>control_module.h</code> 新增 <code>rt_priority_</code> / <code>bind_cpu_</code> 成员变量，<code>control_module.cc</code> 在 YAML 解析时读取</p>
+            <p><span class="k">效果</span>之前 control_module 仅有 <code>sleep_until</code> 周期控制，无 SCHED_FIFO、无 CPU 亲和性。现在与 dcu 模块用同一套 <code>SetRealTimeThread()</code> 工具函数。</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="pcode">C1 · pthread_setschedparam 返回值</span><span class="chip must">已合入</span><span class="role">comm_utils.cpp · <code>&lt;0</code> → <code>!=0</code></span></summary>
+          <div class="detail">
+            <p><span class="k">文件</span><code>module/dcu_driver_module/xyber_controller/xyber_api/src/comm_utils.cpp</code> 第 53 行</p>
+            <p><span class="k">Bug</span><code>pthread_setschedparam()</code> 成功返回 <b>0</b>，失败返回 <b>正 errno</b>（永远非负）。原检查 <code>&lt; 0</code> 恒为 false，任何 SCHED_FIFO 设置失败（如 <code>EPERM</code> 权限不足）都被静默吞掉。</p>
+            <p><span class="k">修复</span><code>if (pthread_setschedparam(pid, SCHED_FIFO, &amp;s_parm) <b>!= 0</b>)</code></p>
+            <p><span class="k fix">影响范围</span>ecat_io_loop 和 rl_control_pub 都走此函数，C1 修复前两者都可能<b>假实时</b>（以为自己 SCHED_FIFO 了，实际跑在 SCHED_OTHER）。</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="pcode">C2 · SetRealTimeThread 返回值</span><span class="chip must">已合入</span><span class="role">ethercat_manager.cpp + control_module.cc · 丢弃→检查</span></summary>
+          <div class="detail">
+            <p><span class="k">文件</span>两处调用点</p>
+            <ul>
+              <li><code>module/dcu_driver_module/…/ethercat_manager.cpp</code> 第 316 行 — <code>WorkLoop()</code> 入口</li>
+              <li><code>module/control_module/src/control_module.cc</code> 第 236 行 — <code>MainLoop()</code> 入口</li>
+            </ul>
+            <p><span class="k">Bug</span>两处都调 <code>SetRealTimeThread()</code> 但<b>丢弃了 bool 返回值</b>。函数内部失败时记录了日志，但调用方不知道失败了，继续运行——以为自己是实时线程，实际是 SCHED_OTHER。</p>
+            <p><span class="k">修复</span>加 <code>if (!…)</code> 检查，失败时打 <code>LOG_ERROR</code>/<code>AIMRT_ERROR</code>，明确告知"运行在非实时模式"。</p>
+          </div>
+        </details>
+
+      </div>
+    </div>
+
+    <!-- 待办 -->
+    <div class="group">
+      <p class="group-h">⏳ 待办 · 3 项</p>
+      <div class="cards">
+
+        <details class="card">
+          <summary><span class="pcode">C3 · ONNX 线程限制</span><span class="chip">待实现</span><span class="role">rl_controller.cc · 加 SetIntraOpNumThreads</span></summary>
+          <div class="detail">
+            <p><span class="k">现状</span><code>rl_controller.cc</code> LoadModel() 只设了 <code>SetInterOpNumThreads(1)</code>（算子间串行），但<b>未设</b> <code>SetIntraOpNumThreads</code>，ONNX Runtime 默认用全部 CPU 核心（i7-12800H = 20 线程）做算子内并行。</p>
+            <p><span class="k">影响</span>RL 模型很小（47/53 维输入，12/14 维输出），20 线程并行开销远超收益，反而引入调度抖动。</p>
+            <p><span class="k fix">方案</span>YAML 的 <code>onnx_conf</code> 加 <code>intra_op_threads: 1</code> 字段，默认 1（单线程），以后想调不用改代码。LoadModel() 读取并调用 <code>SetIntraOpNumThreads()</code>。</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="pcode">应用层 preflight</span><span class="chip">待实现</span><span class="role">run_main.sh --check-only · 启动前 7 项检查</span></summary>
+          <div class="detail">
+            <p><span class="k">来源</span><code>f1_realtime_optimization.md</code> §4.1</p>
+            <p><span class="k">7 项检查</span>（原 8 项含 <code>ulimit -r</code>，因控制服务改以 root 运行、rtprio/memlock limits 取消而删去）</p>
+            <ul>
+              <li><b>PREEMPT_RT 内核</b> — <code>/sys/kernel/realtime == 1</code>，否则拒绝启动</li>
+              <li><b>swap 关闭</b> — <code>swapon --show</code> 为空，否则拒绝启动</li>
+              <li><b>governor = performance</b> — 全核检查，否则拒绝启动</li>
+              <li><b>配置文件存在且可解析</b> — <code>x1_cfg.yaml</code> 及其引用的 <code>rl_x1.yaml</code>、<code>dcu_x1.yaml</code>、<code>joy_x1.yaml</code> 全部存在且 YAML 解析成功，否则拒绝启动</li>
+              <li><b>EtherCAT 网口存在且 UP</b> — 从配置解析 ifname 后检查，否则拒绝启动</li>
+              <li><b>bind_cpu 合法</b> — 配置的 CPU 号在线，否则拒绝启动</li>
+              <li><b>ONNX 模型文件存在</b> — 从 <code>rl_x1.yaml</code> 解析路径，否则拒绝启动</li>
+            </ul>
+            <p class="warn-line"><span class="k fix">关于"配置文件存在且可解析"</span>这里指的是 <code>install/linux/bin/cfg/x1_cfg.yaml</code>——它是 aimrt_main 的主配置，声明了加载哪些模块、每个模块的 cfg_file_path 指向哪里、executor/channel/log 怎么配。preflight 会<b>递归验证</b>它引用的 3 个子配置（<code>rl_x1.yaml</code> / <code>dcu_x1.yaml</code> / <code>joy_x1.yaml</code>）也都在且可解析。目的：<b>fail fast</b>——在 aimrt_main 启动前就发现配置缺失/损坏，而非跑一半崩溃。</p>
+          </div>
+        </details>
+
+        <details class="card">
+          <summary><span class="pcode">验证脚本完善</span><span class="chip">待实现</span><span class="role">verify-rt-config-claude-merge.sh · 补覆盖</span></summary>
+          <div class="detail">
+            <p><span class="k">现状</span><code>verify-rt-config-claude-merge.sh</code> 是只读验证脚本，覆盖内核层（GRUB 参数）、OS 层（governor/boost/THP/swap/sysctl/irqbalance）、IRQ 亲和性（NVMe→0、xHCI→8、EtherCAT→0）、ethtool 调优、systemd/udev。</p>
+            <p><span class="k">待补</span>与 <code>f1-rt-config-claude-merge.sh</code>（配置写入脚本）的 <code>preflight()</code> 形成三层验证体系：</p>
+            <ul>
+              <li><b>层 1</b> — 配置脚本自身 preflight（root/OS/VM/依赖）</li>
+              <li><b>层 2</b> — 独立验证脚本（系统级只读检查）</li>
+              <li><b>层 3</b> — 应用层 preflight（YAML/模型/网络，run_main.sh --check-only）</li>
+            </ul>
+            <p><span class="k">判断</span>三层各司其职，不应合并。层 1 是"写入前自检"，层 2 是"写入后验证"，层 3 是"每次启动前守护"。</p>
+          </div>
+        </details>
+
+      </div>
+    </div>
+
+    <!-- 配套文件 -->
+    <div class="note" style="margin-top:16px">
+      <p style="margin:0"><b>配套文件</b></p>
+      <p style="margin:4px 0 0;font-size:13px;line-height:1.7">
+        <code>f1-rt-config-claude-merge.sh</code> — 配置写入脚本（GRUB/sysctl/systemd/udev/ethtool）<br>
+        <code>verify-rt-config-claude-merge.sh</code> — 只读验证脚本（系统级检查）<br>
+        <code>f1_realtime_optimization.md</code> — 技术文档，§4.1 定义了应用层 8 项 preflight 检查<br>
+        <code>install/linux/bin/cfg/x1_cfg.yaml</code> — 主配置文件，preflight 会递归验证它引用的子配置
+      </p>
+    </div>
+  </section>
+
+  <p class="foot">F1 RT 配置速查 · 对应脚本 <code style="font-family:var(--mono);color:var(--fg-dim)">f1-rt-config-claude-merge.sh</code> · 文档 <code style="font-family:var(--mono);color:var(--fg-dim)">f1-rt-config-claude-merge.md</code> · 卡片内容为精炼版，完整原文见 md §4</p>
+
+</div>
+
+<script>
+  // CPU 拓扑生成
+  (function(){
+    const roles = {
+      0:"管家<br>EtherCAT IRQ",1:"管家",2:"管家",3:"管家",
+      4:"★ EtherCAT<br>FIFO:90",5:"★ sibling<br>隔离",
+      6:"★ Control+ONNX<br>FIFO:80",7:"★ sibling<br>隔离",
+      8:"导航核<br>xHCI/r8152",
+      9:"大脑",10:"大脑",11:"大脑",12:"大脑",13:"大脑",14:"大脑",
+      15:"大脑",16:"大脑",17:"大脑",18:"大脑",19:"大脑"
+    };
+    const cls = {
+      0:"hk",1:"hk",2:"hk",3:"hk",
+      4:"rt",5:"iso",6:"rt",7:"iso",
+      8:"nav"
+    };
+    const root = document.getElementById('cpu');
+    for(let i=0;i<20;i++){
+      const c = cls[i]||"";
+      const d = document.createElement('div');
+      d.className = "cell "+c;
+      d.innerHTML = '<span class="id">CPU'+i+'</span><span class="rl">'+(roles[i]||"大脑/其余")+'</span>';
+      root.appendChild(d);
+    }
+  })();
+
+  // 筛选 + 展开/收起
+  (function(){
+    const tabs = document.querySelectorAll('.tab');
+    const groups = document.querySelectorAll('#matrix .group');
+    const cards = document.querySelectorAll('#matrix details.card');
+    tabs.forEach(t=>t.addEventListener('click',()=>{
+      tabs.forEach(x=>x.classList.remove('on'));
+      t.classList.add('on');
+      const f = t.dataset.f;
+      groups.forEach(g=>{
+        const show = (f==='all'||g.dataset.layer===f);
+        g.style.display = show?'':'none';
+      });
+    }));
+
+    const btn = document.getElementById('expandAll');
+    let allOpen = false;
+    btn.addEventListener('click',()=>{
+      allOpen = !allOpen;
+      cards.forEach(c=>{
+        const g = c.closest('.group');
+        if(g && g.style.display==='none') return; // 跳过被筛掉的
+        c.open = allOpen;
+      });
+      btn.textContent = allOpen ? '收起全部' : '展开全部';
+    });
+  })();
+</script>
