@@ -197,6 +197,8 @@ class RLController : public ControllerBase {
 
   double obs_phase_sin_{0.0};
   double obs_phase_cos_{1.0};
+  // walk 相位起点墙钟（秒）；<0 表示当前处于 stand/未进入 walk，进入 walk 首帧锁定
+  double walk_phase_start_time_{-1.0};
   double obs_cmd_linear_x_{0.0};
   double obs_cmd_linear_y_{0.0};
   double obs_cmd_angular_z_{0.0};

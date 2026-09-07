@@ -444,15 +444,45 @@ void RLController::ComputeObservation() {
       obs_cmd_angular_z_ = joy_data_.angular.z;
     }
 
-    double phase = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
+    //==================== 相位计算逻辑切换（二选一：两段独立，同时启用会编译报错防呆） ====================
+    // 切换方法：注释掉【旧逻辑】段并放开【新逻辑】段 → 新行为；反之 → 旧行为。
+    // 每段都自带变量声明，互不依赖。
+
+    //--------------------【旧逻辑】BEGIN：墙钟相位，进入 walk 时初始相位随机（stand -> walk 跳变） --------------------
+    // double phase = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
+    // if (walk_step_conf_.sw_mode) {
+    //   const double cmd_norm =
+    //       std::sqrt(Square(joy_data_.linear.x) + Square(joy_data_.linear.y) + Square(obs_cmd_angular_z_));
+    //   if (cmd_norm <= walk_step_conf_.cmd_threshold) {
+    //     phase = 0;
+    //   }
+    // }
+    // phase = phase / walk_step_conf_.cycle_time;
+    //--------------------【旧逻辑】END --------------------
+
+    //--------------------【新逻辑】BEGIN：stand 锁相 0；进入 walk 首帧锁定墙钟起点，相位从 0 连续推进 --------------------
+    const double now_sec = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
+    double phase = 0.0;
     if (walk_step_conf_.sw_mode) {
       const double cmd_norm =
           std::sqrt(Square(joy_data_.linear.x) + Square(joy_data_.linear.y) + Square(obs_cmd_angular_z_));
       if (cmd_norm <= walk_step_conf_.cmd_threshold) {
-        phase = 0;
+        walk_phase_start_time_ = -1.0;  // stand 态：复位起点，下次进 walk 重新从 0 起算
+        phase = 0.0;
+      } else {
+        if (walk_phase_start_time_ < 0.0) {
+          walk_phase_start_time_ = now_sec;  // 进入 walk 首帧：锁定起点，相位 = 0
+        }
+        phase = (now_sec - walk_phase_start_time_) / walk_step_conf_.cycle_time;
       }
+    } else {
+      // sw_mode=false（无站立锁相）：从首帧起从 0 推进，同样不引入随机初始相位
+      if (walk_phase_start_time_ < 0.0) {
+        walk_phase_start_time_ = now_sec;
+      }
+      phase = (now_sec - walk_phase_start_time_) / walk_step_conf_.cycle_time;
     }
-    phase = phase / walk_step_conf_.cycle_time;
+    //--------------------【新逻辑】END --------------------
 
     obs_phase_sin_ = std::sin(2 * M_PI * phase);
     obs_phase_cos_ = std::cos(2 * M_PI * phase);
