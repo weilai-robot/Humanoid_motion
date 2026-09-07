@@ -85,6 +85,9 @@ class JoyStickModule : public aimrt::ModuleBase {
   std::shared_ptr<JoyVelLimiter> limiter_ = nullptr;
   GearModeConf gear_mode_;
 
+  // walk 速度来源开关（yaml walk_cmd_source）：false=摇杆档位遥控(gear)，true=固定速度指令(constant)
+  bool walk_cmd_source_constant_{false};
+
   uint32_t freq_{};
 
   // 行走模式状态：按一次切换，激活后自动持续发送 /cmd_vel

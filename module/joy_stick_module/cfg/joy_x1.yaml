@@ -1,5 +1,13 @@
 freq: 20   # 数据发布频率，单位：Hz
 
+#######################    walk 速度来源开关（按 X 进入 walk 后生效，二选一）：   #######################
+#   gear     : 摇杆档位遥控（下方 gear_mode 段生效，推杆=档位速度、回中=停）
+#   constant : 固定速度指令（下方 constant_velocity 段生效，进 walk 即匀速直行，摇杆无效）
+# 切换方法（任选其一）：
+#   1. 改本行 walk_cmd_source 的值（两段配置同时保留，无需注释）
+#   2. 旧行为：注释掉 constant_velocity 段 → 等效 gear；注释掉 gear_mode 段 → 恢复连续比例摇杆
+walk_cmd_source: gear
+
 # IMU 订阅话题（用于 RT 偏航闭环）
 sub_imu_topic: /imu/data
 
@@ -54,9 +62,7 @@ twist_pubs:
     # twist的线速度和角速度限制
     velocity_limit_lb: [-0.5, -0.3, -0.5]
     velocity_limit_ub: [0.5, 0.3, 0.5]
-    # 固定速度（可选）：设置后忽略摇杆轴，使用以下固定值行走
-    # 单位：linear m/s，angular rad/s；删除或注释此段恢复摇杆控制
-    # ⚠️ 使用 Nav2 导航时必须注释掉 constant_velocity，否则手柄会持续抢占 /cmd_vel_limiter
+    # 下方 gear_mode / constant_velocity 两段可同时保留，由顶部 walk_cmd_source 开关选择生效段
 
 #######################    摇杆档位模式（每轴一档）：   #######################
     # 摇杆=档位选择器不是油门：推过阈值输出固定速度，回中输出 0。
@@ -66,7 +72,7 @@ twist_pubs:
     # ⚠️ x 负向未训练（lin_vel_x=[0.1,0.4] 无负样本）→ x_neg_scale=0：向后推无响应，倒退需"转弯180°+前进"替代，
     #    负向训练列 v6 里程碑。y/z 双向均已训练（[−0.4,0.4]/[−0.6,0.6]）。
     # 死区 0.2：吞掉回中附近抖动；x_neg_scale/y_neg_scale/z_neg_scale 缩放负向档位（0=禁用该方向）。
-    # 恢复连续比例控制：注释掉整个 gear_mode 段
+    # 生效条件：walk_cmd_source: gear（顶部开关）
     gear_mode:
       enabled: true
       deadzone: 0.2
@@ -76,14 +82,16 @@ twist_pubs:
       y_neg_scale: 0.15
       z_scale: 0.2
       z_neg_scale: 0.2
-#######################    小脑行走测试（已由 gear_mode 取代，保留作对照基线）：   #######################
-    # 小脑行走测试（固定速度直行，20260824 v5 真机三速度验证通道；恢复用：取消注释并注释 gear_mode）
-    # constant_velocity:
-    #   linear-x: 0.25
-    #   linear-y: 0.0
-    #   angular-z: 0.0
-#######################    大脑导航测试：   #######################
-    # 大脑导航测试：
+#######################    固定速度指令模式（walk_cmd_source: constant 时生效）：   #######################
+    # 固定速度（进入 walk 后忽略摇杆轴，使用以下固定值行走）
+    # 单位：linear m/s，angular rad/s
+    # ⚠️ 使用 Nav2 导航时必须切回 walk_cmd_source: gear，否则手柄会持续抢占 /cmd_vel_limiter
+    # 20260824 v5 真机三速度验证通道：0.25 为已验证安全速度
+    constant_velocity:
+      linear-x: 0.25
+      linear-y: 0.0
+      angular-z: 0.0
+#######################    大脑导航测试（备用，需替换上方 constant_velocity 值）：   #######################
     # constant_velocity:
     #   linear-x: 0.6
     #   linear-y: 0.0

@@ -25,6 +25,14 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
       YAML::Node cfg_node = YAML::LoadFile(file_path.data());
       freq_ = cfg_node["freq"].as<uint32_t>();
 
+      // walk 速度来源开关：gear=摇杆档位遥控 / constant=固定速度指令（按 X 进 walk 后生效）
+      if (cfg_node["walk_cmd_source"]) {
+        const auto src = cfg_node["walk_cmd_source"].as<std::string>();
+        walk_cmd_source_constant_ = (src == "constant");
+        AIMRT_INFO("[JoyStick] walk_cmd_source = {} ({})", src,
+                   walk_cmd_source_constant_ ? "固定速度指令模式" : "摇杆档位遥控模式");
+      }
+
       // prepare executor
       executor_ = core_.GetExecutorManager().GetExecutor("joy_stick_pub_thread");
       AIMRT_CHECK_ERROR_THROW(executor_, "Can not get executor 'joy_stick_pub_thread'.");
@@ -441,8 +449,9 @@ void JoyStickModule::MainLoop() {
         }
       }
       if (ret) {
-        // 固定速度模式：忽略摇杆轴，直接发布预设速度
-        if (twist_pub.use_constant_velocity) {
+        // 固定速度模式：仅当 walk_cmd_source=constant 时生效，忽略摇杆轴直接发布预设速度；
+        // walk_cmd_source=gear 时走下方摇杆分支（gear_mode 档位映射）
+        if (twist_pub.use_constant_velocity && walk_cmd_source_constant_) {
           vel_msgs.linear.x = 0.0;
           vel_msgs.linear.y = 0.0;
           vel_msgs.linear.z = 0.0;
