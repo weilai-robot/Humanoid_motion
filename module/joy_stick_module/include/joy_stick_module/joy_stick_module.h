@@ -103,6 +103,9 @@ class JoyStickModule : public aimrt::ModuleBase {
   double rt_max_angular_z_ = 0.5;
   double rt_i_limit_ = 0.3;            // 积分项限幅 rad/s
   double rt_linear_y_ = 0.0;           // 侧向补偿 m/s（正=右，负=左）
+
+  // LT 刹车参数（从配置读取）
+  double lt_brake_duration_ = 8.0;     // 刹车总时长 s
 };
 
 }  // namespace xyber_x1_infer::joy_stick_module
