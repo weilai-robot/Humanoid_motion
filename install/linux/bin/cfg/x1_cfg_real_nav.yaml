@@ -1,0 +1,75 @@
+# ============================================================
+# x1_cfg_real_nav.yaml — 真机「大脑(导航) + 小脑(运控)」联合运行配置
+#
+# 与 x1_cfg.yaml 的差异: 不加载 JoyStickModule（手柄模块）。
+#   目的: 导航期间根除手柄对 /cmd_vel_limiter 的一切写入,
+#         速度指令唯一来源为 Nav2 → odom_bridge → /cmd_vel_limiter
+#
+# 模式切换（手柄按键不可用，必须由外部脚本/话题驱动）:
+#   ./switch_x1_mode.sh ready      # zero → stand → walk
+#   ./switch_x1_mode.sh stand      # 导航结束回站立（先 stand, 后让 cmd_vel 归零）
+#
+# 启动方式:
+#   cd build && bash ./run_real_nav.sh
+#   或由 scripts/run_real_all.sh（大脑+小脑一键启动）统一拉起
+# ============================================================
+aimrt:
+  plugin:
+    plugins:
+      - name: ros2_plugin
+        path: ./libaimrt_ros2_plugin.so
+        options:
+          node_name: x1_rl_ctrl_node
+          executor_type: MultiThreaded # SingleThreaded/StaticSingleThreaded/MultiThreaded
+          executor_thread_num: 4
+  log: # 日志配置
+    core_lvl: INFO # Trace/Debug/Info/Warn/Error/Fatal/Off
+    backends:
+      - type: console # 控制台
+      - type: rotate_file # 文件
+        options:
+          path: ./log
+          filename: x1_rl_ctrl_real_nav.log
+          max_file_size_m: 4
+          max_file_num: 10
+  executor: # 执行器配置
+    executors:
+      - name: rl_control_pub_thread # 创建一个单线程执行器
+        type: simple_thread
+      # 注: joy_stick_pub_thread 已移除（JoyStickModule 未加载, 无任何引用）
+  channel: # 消息队列相关配置
+    backends: # 消息队列后端配置
+      - type: local
+      - type: ros2
+    pub_topics_options: # 为 publish topic 选择后端
+      - topic_name: "(.*)"
+        enable_backends: [local, ros2]
+    sub_topics_options: # 为 subscribe topic 选择后端
+      - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|cmd_vel_limiter)"
+        enable_backends: [local, ros2]  # 允许外部 ROS2 节点发布模式指令和速度指令（含 Nav2）
+      - topic_name: "(.*)"
+        enable_backends: [local]
+  rpc: # rpc相关配置
+    backends: # rpc后端配置
+      - type: local
+      - type: ros2
+    clients_options: # 为 client 选择后端
+      - func_name: "(.*)"
+        enable_backends: [local]
+    servers_options: # 为 server 选择后端
+      - func_name: "(.*)"
+        enable_backends: [local, ros2]
+  module: # 模块配置
+    pkgs: # 要加载的动态库配置
+      - path: ./libpkg1.so
+        enable_modules:
+          # JoyStickModule 不加载: 杜绝手柄对 /cmd_vel_limiter 的抢占
+          - ControlModule
+          - DcuDriverModule
+    modules: # 模块
+      - name: ControlModule
+        log_lvl: INFO
+        cfg_file_path: ./cfg/control_module/rl_x1.yaml
+      - name: DcuDriverModule
+        log_lvl: WARN
+        cfg_file_path: ./cfg/dcu_driver_module/dcu_x1.yaml
