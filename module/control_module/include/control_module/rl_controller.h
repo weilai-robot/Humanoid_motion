@@ -79,6 +79,23 @@ class RLController : public ControllerBase {
     std::set<std::string> paralle_list;
   } lpf_conf_;
 
+  // AMP 全身策略部署适配（x1_29_AMP / v46s 契约）：
+  //   obs 每帧 96 维 = [ang_vel(3), projected_gravity(3), cmd(3),
+  //                     joint_pos_rel(n), joint_vel(n), last_action(n)]，n=29
+  //   历史按 term-major 展开（每项 num_hist 帧 oldest-first 拼接），
+  //   归一化器融合在 ONNX 图内，喂原始值（不走 obs_scales）。
+  struct AmpConf {
+    int settle_ticks;      // 软启动拍数（策略拍，50Hz 下 50 拍 = 1.0s）
+    double cmd_x_min;      // 指令限幅（训练范围）
+    double cmd_x_max;
+    double cmd_y_min;
+    double cmd_y_max;
+    double cmd_yaw_min;
+    double cmd_yaw_max;
+  } amp_conf_;
+  bool amp_mode_{false};
+  int amp_settle_remaining_{0};
+
   std::unique_ptr<Ort::Session> session_ptr_;
   Ort::MemoryInfo memory_info_;
   std::vector<const char*> input_names_;

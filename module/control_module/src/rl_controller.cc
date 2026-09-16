@@ -1,5 +1,6 @@
 #include "control_module/rl_controller.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -118,6 +119,37 @@ void RLController::Init(const YAML::Node& cfg_node) {
   auto paralle_list = cfg_node["lpf_conf"]["paralle_list"].as<std::vector<std::string>>();
   lpf_conf_.paralle_list = std::set<std::string>(paralle_list.begin(), paralle_list.end());
 
+  // AMP 全身策略模式（可选，缺省 legacy 保持旧策略行为不变）。
+  // 契约来源：x1_29_AMP sim2sim/deploy_onnx_rt.py + mujoco_rollout.py（v46s 验证）。
+  {
+    const std::string obs_layout =
+        cfg_node["obs_layout"] ? cfg_node["obs_layout"].as<std::string>() : "legacy";
+    amp_mode_ = (obs_layout == "amp");
+    if (amp_mode_) {
+      AIMRT_CHECK_ERROR_THROW(
+          onnx_conf_.observations_size == 9 + 3 * onnx_conf_.actions_size,
+          "amp obs_layout requires observations_size == 9 + 3*actions_size, got {} vs {}",
+          onnx_conf_.observations_size, 9 + 3 * onnx_conf_.actions_size);
+      const auto& amp_node = cfg_node["amp_conf"];
+      amp_conf_.settle_ticks =
+          amp_node["settle_ticks"] ? amp_node["settle_ticks"].as<int>() : 50;
+      amp_conf_.cmd_x_min = amp_node["cmd_x_range"] ? amp_node["cmd_x_range"][0].as<double>() : -0.5;
+      amp_conf_.cmd_x_max = amp_node["cmd_x_range"] ? amp_node["cmd_x_range"][1].as<double>() : 2.5;
+      amp_conf_.cmd_y_min = amp_node["cmd_y_range"] ? amp_node["cmd_y_range"][0].as<double>() : -0.5;
+      amp_conf_.cmd_y_max = amp_node["cmd_y_range"] ? amp_node["cmd_y_range"][1].as<double>() : 0.5;
+      amp_conf_.cmd_yaw_min = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][0].as<double>() : -1.5;
+      amp_conf_.cmd_yaw_max = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][1].as<double>() : 1.5;
+      AIMRT_INFO(
+          "RLController amp mode: obs {} x hist {}, act {}, action_scale {}, "
+          "decimation {}, settle {} ticks, cmd x[{},{}] y[{},{}] yaw[{},{}]",
+          onnx_conf_.observations_size, onnx_conf_.num_hist, onnx_conf_.actions_size,
+          walk_step_conf_.action_scale, walk_step_conf_.decimation, amp_conf_.settle_ticks,
+          amp_conf_.cmd_x_min, amp_conf_.cmd_x_max,
+          amp_conf_.cmd_y_min, amp_conf_.cmd_y_max,
+          amp_conf_.cmd_yaw_min, amp_conf_.cmd_yaw_max);
+    }
+  }
+
   LoadModel();
 
   diag_log_dir_ = "test_logs/data_csv";
@@ -172,6 +204,11 @@ void RLController::Init(const YAML::Node& cfg_node) {
 void RLController::RestartController() {
   is_first_frame_ = true;
   diag_pending_frame_ = false;
+  if (amp_mode_) {
+    // 对齐参考实现 run_hardware()：进入控制器即软启动，历史/动作清零
+    amp_settle_remaining_ = amp_conf_.settle_ticks;
+    last_actions_.setZero();
+  }
 }
 
 void RLController::SetLoggingActive(bool active) {
@@ -260,6 +297,11 @@ void RLController::Update() {
   if (loop_count_ % walk_step_conf_.decimation == 0) {
     ComputeObservation();
     ComputeActions();
+    if (amp_mode_ && amp_settle_remaining_ > 0) {
+      // 软启动期：目标角 = default_q，零动作（观测侧 cmd 同拍置零，见 ComputeObservation）
+      std::fill(actions_.begin(), actions_.end(), 0.0f);
+      --amp_settle_remaining_;
+    }
 
     if (diag_logging_enabled_) {
       diag_pending_frame_ = true;
@@ -394,7 +436,33 @@ void RLController::UpdateStateEstimation() {
 
 void RLController::ComputeObservation() {
   vector_t propri_obs(onnx_conf_.observations_size);
-  {
+  if (amp_mode_) {
+    // AMP 契约（sim2sim 验证）：每帧 [ang_vel(3), grav(3), cmd(3),
+    // jpos_rel(n), jvel(n), last_act(n)]，原始值不缩放（归一化器融合在
+    // ONNX 图内）；无相位时钟项；指令限幅到训练范围；软启动期指令置零。
+    std::shared_lock<std::shared_mutex> lock(joy_mutex_);
+    double vx = joy_data_.linear.x;
+    double vy = joy_data_.linear.y;
+    double wz = joy_data_.angular.z;
+    if (amp_settle_remaining_ > 0) {
+      vx = 0.0;
+      vy = 0.0;
+      wz = 0.0;
+    }
+    vx = std::max(amp_conf_.cmd_x_min, std::min(amp_conf_.cmd_x_max, vx));
+    vy = std::max(amp_conf_.cmd_y_min, std::min(amp_conf_.cmd_y_max, vy));
+    wz = std::max(amp_conf_.cmd_yaw_min, std::min(amp_conf_.cmd_yaw_max, wz));
+    obs_cmd_linear_x_ = vx;
+    obs_cmd_linear_y_ = vy;
+    obs_cmd_angular_z_ = wz;
+
+    propri_obs << propri_.base_ang_vel,
+        propri_.projected_gravity,
+        vx, vy, wz,
+        (propri_.joint_pos - joint_conf_.init_state),
+        propri_.joint_vel,
+        last_actions_;
+  } else {
     std::shared_lock<std::shared_mutex> lock(joy_mutex_);
     double phase = duration<double>(high_resolution_clock::now().time_since_epoch()).count();
     if (walk_step_conf_.sw_mode) {
@@ -433,13 +501,19 @@ void RLController::ComputeObservation() {
       }
     }
 
-    for (int ii = 5 + onnx_conf_.actions_size * 2; ii < 5 + onnx_conf_.actions_size * 3; ++ii) {
-      propri_obs(ii, 0) = 0.0;
-    }
+    if (amp_mode_) {
+      // 参考实现（mujoco_rollout / deploy_onnx_rt）：历史零初始化，
+      // 首帧仅入当前观测 —— 与 Isaac env reset 行为一致
+      propri_history_buffer_.setZero();
+    } else {
+      for (int ii = 5 + onnx_conf_.actions_size * 2; ii < 5 + onnx_conf_.actions_size * 3; ++ii) {
+        propri_obs(ii, 0) = 0.0;
+      }
 
-    for (int ii = 0; ii < onnx_conf_.num_hist; ++ii) {
-      propri_history_buffer_.segment(ii * onnx_conf_.observations_size, onnx_conf_.observations_size) =
-          propri_obs.cast<float>();
+      for (int ii = 0; ii < onnx_conf_.num_hist; ++ii) {
+        propri_history_buffer_.segment(ii * onnx_conf_.observations_size, onnx_conf_.observations_size) =
+            propri_obs.cast<float>();
+      }
     }
     is_first_frame_ = false;
   }
@@ -448,8 +522,27 @@ void RLController::ComputeObservation() {
       propri_history_buffer_.tail(propri_history_buffer_.size() - onnx_conf_.observations_size);
   propri_history_buffer_.tail(onnx_conf_.observations_size) = propri_obs.cast<float>();
 
-  for (int ii = 0; ii < onnx_conf_.observations_size * onnx_conf_.num_hist; ++ii) {
-    observations_[ii] = static_cast<float>(propri_history_buffer_[ii]);
+  if (amp_mode_) {
+    // term-major 展开（IsaacLab obs group 历史展平方式，x1_29_AMP v26
+    // 根因修复点）：每个观测项的 num_hist 帧 oldest-first 拼接，项间顺序
+    // = 帧内布局 [ang, grav, cmd, jpos, jvel, act]。帧存储仍是 frame-major
+    // （上面整体移位），此处仅做重排拷贝。
+    const int n = onnx_conf_.actions_size;
+    const int frame = onnx_conf_.observations_size;
+    const int term_bounds[7] = {0, 3, 6, 9, 9 + n, 9 + 2 * n, 9 + 3 * n};
+    int idx = 0;
+    for (int t = 0; t < 6; ++t) {
+      for (int f = 0; f < onnx_conf_.num_hist; ++f) {
+        for (int k = term_bounds[t]; k < term_bounds[t + 1]; ++k) {
+          observations_[idx++] =
+              static_cast<float>(propri_history_buffer_[static_cast<int64_t>(f) * frame + k]);
+        }
+      }
+    }
+  } else {
+    for (int ii = 0; ii < onnx_conf_.observations_size * onnx_conf_.num_hist; ++ii) {
+      observations_[ii] = static_cast<float>(propri_history_buffer_[ii]);
+    }
   }
 
   const scalar_t obs_min = -onnx_conf_.observations_clip;

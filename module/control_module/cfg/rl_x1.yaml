@@ -15,12 +15,12 @@ robot_states:
   # 空闲模式 
   idle:
     trigger_topic: /idle_mode
-    pre_states: [keep, stand_&_plan, keep_&_plan, walk_leg_&_plan, zero, stand, walk_leg, walk_leg_arm]
+    pre_states: [keep, stand_&_plan, keep_&_plan, walk_leg_&_plan, zero, stand, walk_leg, walk_leg_arm, walk_amp]
     controllers: [pd_idle]
   # keep模式
   keep:
     trigger_topic: /keep_mode
-    pre_states: [idle, stand_&_plan, keep_&_plan, wa_&_plan, zero, stand, walk_leg, walk_leg_arm]
+    pre_states: [idle, stand_&_plan, keep_&_plan, wa_&_plan, zero, stand, walk_leg, walk_leg_arm, walk_amp]
     controllers: [pd_keep]
 
   # 零模式
@@ -31,7 +31,7 @@ robot_states:
   # 站立模式
   stand:
     trigger_topic: /stand_mode
-    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm]
+    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm, walk_amp]
     controllers: [pd_zero, pd_stand]
 
   # 行走模式1
@@ -44,6 +44,12 @@ robot_states:
     trigger_topic: /walk_mode2
     pre_states: [stand_&_plan, walk_leg_&_plan, stand, walk_leg]
     controllers: [pd_zero, pd_stand, rl_walk_leg_shoulder]
+
+  # AMP全身行走模式（x1_29_AMP v46s soup 策略，29DOF）
+  walk_amp:
+    trigger_topic: /amp_mode
+    pre_states: [stand, stand_&_plan, walk_amp]
+    controllers: [pd_zero, pd_stand, rl_walk_amp]
 
   # plan模式
   stand_&_plan:
@@ -399,6 +405,68 @@ controllers:
       wc: 100.
       ts: 0.001
       paralle_list:
+        - left_ankle_pitch_joint
+        - left_ankle_roll_joint
+        - right_ankle_pitch_joint
+        - right_ankle_roll_joint
+
+  # AMP 全身行走（x1_29_AMP v46s model soup, 29DOF）
+  # 契约: obs 96维/帧 x 3帧 term-major, 50Hz 策略, q = default_q + 0.25*action
+  # 关节序 = 训练 LAB_DOF_ORDER（与顶层 joint_list 一致）
+  rl_walk_amp:
+    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
+                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
+                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
+                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    # 训练 default_q（Isaac X1_CFG init joint pos，sim2sim 已验证）
+    init_state: [0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.48891,  0.06213, -0.33853, 0.63204, -0.27224, 0.0,
+                 -0.48891, -0.06213,  0.33853, 0.63204, -0.27224, 0.0]
+    # 训练 PD（X1_CFG stiffness/damping，Isaac 验证）
+    stiffness:  [120.0, 120.0, 150.0,
+                 40.0,  40.0,  40.0,  30.0,  20.0, 15.0, 15.0,
+                 40.0,  40.0,  40.0,  30.0,  20.0, 15.0, 15.0,
+                 120.0, 100.0, 100.0, 150.0, 50.0,  50.0,
+                 120.0, 100.0, 100.0, 150.0, 50.0,  50.0]
+    damping:    [4.0,   4.0,   5.0,
+                 2.0,   2.0,   2.0,   1.5,   1.0,  1.0,  1.0,
+                 2.0,   2.0,   2.0,   1.5,   1.0,  1.0,  1.0,
+                 4.0,   3.3,   3.3,   5.0,   2.5,  2.5,
+                 4.0,   3.3,   3.3,   5.0,   2.5,  2.5]
+    obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
+    amp_conf:
+      settle_ticks: 50       # 软启动 50 拍 @50Hz = 1.0s（零指令零动作）
+      cmd_x_range: [-0.5, 2.5]    # 训练指令范围（超出限幅）
+      cmd_y_range: [-0.5, 0.5]
+      cmd_yaw_range: [-1.5, 1.5]
+    walk_step_conf:
+      action_scale: 0.25     # q_target = default_q + 0.25 * action
+      decimation: 20         # 1000Hz / 20 = 50Hz 策略频率（训练 CONTROL_DT=0.02）
+      cycle_time: 1.0        # amp 模式不使用
+      sw_mode: False         # amp 模式不使用
+      cmd_threshold: 0.05    # amp 模式不使用
+    obs_scales:              # amp 模式绕过（归一化器融合在 ONNX 图内），字段保留兼容解析
+      lin_vel: 1.
+      ang_vel: 1.
+      dof_pos: 1.
+      dof_vel: 1.
+      quat: 1.
+    onnx_conf:
+      policy_file: cfg/control_module/policy/x1_amp_v46s_soup.onnx
+      actions_size: 29
+      observations_size: 96   # 9 + 3*29（每帧 ang3+grav3+cmd3+jpos29+jvel29+act29）
+      num_hist: 3
+      observations_clip: 100.
+      actions_clip: 100.
+      inter_op_threads: 1
+      intra_op_threads: 1
+    lpf_conf:
+      wc: 100.               # 二阶 Butterworth（rad/s, ~15.9Hz）；F1 硬件平滑，如跟踪差可调大
+      ts: 0.001
+      paralle_list:          # 踝并联电机走 effort 模式（F1 硬件结构）
         - left_ankle_pitch_joint
         - left_ankle_roll_joint
         - right_ankle_pitch_joint
