@@ -2,10 +2,13 @@ control_frequecy: 1000
 use_sim_handles: False
 rt_priority: 80        # rl_control_pub_thread 实时优先级 (SCHED_FIFO)
 bind_cpu: 6            # rl_control_pub_thread 绑核
+initial_state: idle
 
 sub_joy_vel_name: /cmd_vel_limiter      # controller 接收的运动指令
 sub_imu_data_name: /imu/data            # IMU数据
 sub_joint_state_name: /joint_states     # 关节数据
+sub_dance_anchor_name: /dance/anchor_pose
+sub_dance_base_velocity_name: /dance/base_velocity
 sub_actuator_cmd_name: /actuator_cmd    # 电机层指令（需 dcu actuator_debug=true）
 sub_actuator_state_name: /actuator_states  # 电机层反馈
 pub_joint_cmd_name: /joint_cmd          # 关节控制指令
@@ -15,12 +18,12 @@ robot_states:
   # 空闲模式 
   idle:
     trigger_topic: /idle_mode
-    pre_states: [keep, stand_&_plan, keep_&_plan, walk_leg_&_plan, zero, stand, walk_leg, walk_leg_arm]
+    pre_states: [keep, stand_&_plan, keep_&_plan, walk_leg_&_plan, zero, stand, walk_leg, walk_leg_arm, dance_x1]
     controllers: [pd_idle]
   # keep模式
   keep:
     trigger_topic: /keep_mode
-    pre_states: [idle, stand_&_plan, keep_&_plan, wa_&_plan, zero, stand, walk_leg, walk_leg_arm]
+    pre_states: [idle, stand_&_plan, keep_&_plan, wa_&_plan, zero, stand, walk_leg, walk_leg_arm, dance_x1]
     controllers: [pd_keep]
 
   # 零模式
@@ -31,7 +34,7 @@ robot_states:
   # 站立模式
   stand:
     trigger_topic: /stand_mode
-    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm]
+    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm, dance_x1]
     controllers: [pd_zero, pd_stand]
 
   # 行走模式1
@@ -44,6 +47,11 @@ robot_states:
     trigger_topic: /walk_mode2
     pre_states: [stand_&_plan, walk_leg_&_plan, stand, walk_leg]
     controllers: [pd_zero, pd_stand, rl_walk_leg_shoulder]
+
+  dance_x1:
+    trigger_topic: /dance_mode
+    pre_states: [stand]
+    controllers: [pd_zero, pd_stand, dance_x1]
 
   # plan模式
   stand_&_plan:
@@ -134,6 +142,8 @@ joint_limits:
   lumbar_roll_joint:
     lower: -0.25
     upper: 0.25
+  # 与 BeyondMimic 训练 URDF 的 [-0.15, +0.45] 冲突；必须现场核实标零和机械限位。
+  # dance_x1 会拒绝加载越界参考动作，不能直接放宽本限位。
   lumbar_pitch_joint:
     lower: -0.45
     upper: 0.15
@@ -347,7 +357,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_7500_new.onnx
+      policy_file: cfg/control_module/policy/rl_walk_leg_20260901_step7500.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66
@@ -387,7 +397,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_shoulder.onnx
+      policy_file: cfg/control_module/policy/archive/rl_walk_leg_shoulder.onnx
       actions_size: 14
       observations_size: 53
       num_hist: 66
@@ -403,4 +413,31 @@ controllers:
         - left_ankle_roll_joint
         - right_ankle_pitch_joint
         - right_ankle_roll_joint
+
+  # X1 BeyondMimic 29DOF motion tracking; joint order is PhysX policy order.
+  dance_x1:
+    joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
+                 left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
+                 left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,
+                 left_knee_pitch_joint, left_shoulder_pitch_joint, right_shoulder_pitch_joint,
+                 right_knee_pitch_joint, left_ankle_pitch_joint, left_shoulder_roll_joint,
+                 right_shoulder_roll_joint, right_ankle_pitch_joint, left_ankle_roll_joint,
+                 left_shoulder_yaw_joint, right_shoulder_yaw_joint, right_ankle_roll_joint,
+                 left_elbow_pitch_joint, right_elbow_pitch_joint, left_elbow_yaw_joint,
+                 right_elbow_yaw_joint, left_wrist_pitch_joint, right_wrist_pitch_joint,
+                 left_wrist_roll_joint, right_wrist_roll_joint]
+    model_file: cfg/control_module/policy/dance_x1_4999.bin
+    motion_file: cfg/control_module/policy/dance_x1_motion.bin
+    decimation: 20          # 1000 Hz / 20 = 50 Hz
+    prepare_ticks: 4000     # 4 s from measured stand pose to reference frame 0
+    sensor_timeout_ms: 80
+    odom_frame: odom
+    anchor_frame: lumbar_pitch_link
+    base_frame: base_link
+    max_tilt_deg: 35.0
+    max_start_speed: 0.2
+    max_tracking_error: 0.8
+    max_start_pose_error: 0.25
+    max_anchor_error: 0.4
+    joint_limit_margin: 0.03
 # ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑

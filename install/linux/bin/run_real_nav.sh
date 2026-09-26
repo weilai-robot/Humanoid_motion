@@ -34,8 +34,9 @@ elif [ -f ../share/ros2_plugin_proto/local_setup.bash ]; then
 fi
 
 # ── 配置检查 ─────────────────────────────────────────────────
-if [ ! -f ./cfg/x1_cfg_real_nav.yaml ]; then
-    echo "[run_real_nav][ERROR] 缺少配置 ./cfg/x1_cfg_real_nav.yaml"
+RUN_CONFIG="${X1_CONTROL_CONFIG:-./cfg/x1_cfg_real_nav.yaml}"
+if [ ! -f "${RUN_CONFIG}" ]; then
+    echo "[run_real_nav][ERROR] 缺少配置 ${RUN_CONFIG}"
     echo "  请在构建机重新执行 ./scripts/build.sh 后再部署"
     exit 1
 fi
@@ -81,7 +82,7 @@ else
         echo "[run_real_nav][WARN] setcap 失败 —— EtherCAT 可能无法通信, 请检查权限"
 fi
 
-./aimrt_main --cfg_file_path=./cfg/x1_cfg_real_nav.yaml
+./aimrt_main --cfg_file_path="${RUN_CONFIG}"
 aimrt_rc=$?
 
 # aimrt_main 退出后, 由 EXIT trap 自动执行 release_neck 下使能

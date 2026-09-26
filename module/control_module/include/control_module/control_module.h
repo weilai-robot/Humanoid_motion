@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <thread>
 #include "aimrt_module_cpp_interface/module_base.h"
+#include "control_module/dance_controller.h"
 #include "control_module/pd_controller.h"
 #include "control_module/rl_controller.h"
 #include "control_module/state_machine.h"
@@ -45,8 +46,10 @@ class ControlModule : public aimrt::ModuleBase {
   std::set<std::string> trigger_topics_;//// 添加重复的 trigger_topic 会报错，这里用 set 来存储
   std::map<std::string, std::shared_ptr<ControllerBase>> controller_map_;
   std::unordered_map<std::string, int> joint_state_index_map_;
+  std::mutex joint_map_mutex_;
   std::unordered_map<std::string, int> joint_cmd_index_map_;
   std::map<std::string, double> joint_offset_map_;
+  std::mutex control_loop_mutex_;  // 状态切换与 1 kHz 指令合成互斥
 
   bool use_sim_handles_;
   int32_t freq_;
