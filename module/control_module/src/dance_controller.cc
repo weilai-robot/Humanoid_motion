@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 
@@ -55,6 +56,7 @@ void DanceController::Init(const YAML::Node& cfg) {
   max_start_pose_error_ = cfg["max_start_pose_error"].as<float>();
   max_anchor_error_ = cfg["max_anchor_error"].as<float>();
   joint_limit_margin_ = cfg["joint_limit_margin"].as<float>();
+  sign_calibration_verified_ = cfg["sign_calibration_verified"].as<bool>();
   odom_frame_ = cfg["odom_frame"].as<std::string>();
   anchor_frame_ = cfg["anchor_frame"].as<std::string>();
   base_frame_ = cfg["base_frame"].as<std::string>();
@@ -67,6 +69,21 @@ void DanceController::Init(const YAML::Node& cfg) {
     throw std::runtime_error("invalid dance control timing or safety limits");
   }
   if (!cfg["joint_limits"]) throw std::runtime_error("dance joint_limits missing");
+  joint_sign_.fill(1.0f);
+  const auto sign_cfg = cfg["joint_sign"];
+  if (sign_cfg) {
+    if (!sign_cfg.IsMap()) throw std::runtime_error("dance joint_sign must be a map");
+    for (const auto& item : sign_cfg) {
+      const std::string name = item.first.as<std::string>();
+      const auto it = std::find(joint_names_.begin(), joint_names_.end(), name);
+      if (it == joint_names_.end()) throw std::runtime_error("unknown dance joint_sign: " + name);
+      const float sign = item.second.as<float>();
+      if (sign != -1.0f && sign != 1.0f) {
+        throw std::runtime_error("dance joint_sign must be +1 or -1: " + name);
+      }
+      joint_sign_[std::distance(joint_names_.begin(), it)] = sign;
+    }
+  }
   joint_conf_.pos_limit_lower.resize(kJoints);
   joint_conf_.pos_limit_upper.resize(kJoints);
   for (int i = 0; i < kJoints; ++i) {
@@ -77,8 +94,10 @@ void DanceController::Init(const YAML::Node& cfg) {
     if (!Finite(lower) || !Finite(upper) || lower + 2 * joint_limit_margin_ >= upper) {
       throw std::runtime_error("invalid dance joint limit: " + joint_names_[i]);
     }
-    joint_conf_.pos_limit_lower(i) = lower;
-    joint_conf_.pos_limit_upper(i) = upper;
+    // The top-level limits and DCU joint feedback share hardware coordinates.
+    // Convert limits into the policy coordinates used by the reference/actor.
+    joint_conf_.pos_limit_lower(i) = joint_sign_[i] > 0 ? lower : -upper;
+    joint_conf_.pos_limit_upper(i) = joint_sign_[i] > 0 ? upper : -lower;
   }
 
   LoadModel(cfg["model_file"].as<std::string>());
@@ -212,8 +231,8 @@ void DanceController::SetJointStateData(
   }
   for (int i = 0; i < kJoints; ++i) {
     const int slot = index.at(joint_names_[i]);
-    joint_state_data_.position[i] = value.position[slot];
-    joint_state_data_.velocity[i] = value.velocity[slot];
+    joint_state_data_.position[i] = joint_sign_[i] * value.position[slot];
+    joint_state_data_.velocity[i] = joint_sign_[i] * value.velocity[slot];
   }
   last_joint_ = Clock::now();
 }
@@ -277,7 +296,7 @@ bool DanceController::ReadSnapshot(Snapshot& out) const {
 
 bool DanceController::Ready() const {
   Snapshot snapshot;
-  if (!ReadSnapshot(snapshot) || motion_.empty()) return false;
+  if (!sign_calibration_verified_ || !ReadSnapshot(snapshot) || motion_.empty()) return false;
   if (snapshot.base_lin_vel.norm() > max_start_speed_) return false;
   const float up = (snapshot.base_quat * Eigen::Vector3f::UnitZ()).z();
   if (std::acos(std::clamp(up, -1.0f, 1.0f)) * kRadToDeg > max_tilt_deg_) return false;
@@ -289,6 +308,10 @@ bool DanceController::Ready() const {
 }
 
 void DanceController::RestartController() {
+  if (!sign_calibration_verified_) {
+    SetFault("dance joint direction calibration not verified");
+    return;
+  }
   Snapshot snapshot;
   if (!ReadSnapshot(snapshot)) {
     SetFault("required feedback missing at dance start");
@@ -445,11 +468,12 @@ my_ros2_proto::msg::JointCommand DanceController::GetJointCmdData() {
       const float torque = kp_[i] * (target_pos_[i] - current_.joint_pos[i]) -
                            kd_[i] * current_.joint_vel[i];
       command.position[i] = 0.0;
-      command.effort[i] = std::clamp(torque, -effort_limit_[i], effort_limit_[i]);
+      command.effort[i] = joint_sign_[i] *
+          std::clamp(torque, -effort_limit_[i], effort_limit_[i]);
       command.stiffness[i] = 0.0;
       command.damping[i] = 0.0;
     } else {
-      command.position[i] = target_pos_[i];
+      command.position[i] = joint_sign_[i] * target_pos_[i];
       command.stiffness[i] = kp_[i];
       command.damping[i] = kd_[i];
     }

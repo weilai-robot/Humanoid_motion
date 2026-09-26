@@ -82,7 +82,7 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
               const auto dance = it == controller_map_.end()
                                      ? nullptr : std::dynamic_pointer_cast<DanceController>(it->second);
               if (!dance || !dance->Ready()) {
-                AIMRT_ERROR("Dance entry rejected: pose, velocity, IMU or joint feedback is missing/unsafe");
+                AIMRT_ERROR("Dance entry rejected: sign calibration unverified or pose, velocity, IMU, joint feedback unsafe");
                 return;
               }
             }

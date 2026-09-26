@@ -142,8 +142,8 @@ joint_limits:
   lumbar_roll_joint:
     lower: -0.25
     upper: 0.25
-  # 与 BeyondMimic 训练 URDF 的 [-0.15, +0.45] 冲突；必须现场核实标零和机械限位。
-  # dance_x1 会拒绝加载越界参考动作，不能直接放宽本限位。
+  # 本值是 DCU 关节坐标限位；训练 URDF 的策略坐标限位为 [-0.15, +0.45]。
+  # 舞蹈控制器暂按 q_policy = -q_dcu 映射腰俯仰，须现场确认，不能直接放宽限位。
   lumbar_pitch_joint:
     lower: -0.45
     upper: 0.15
@@ -440,4 +440,9 @@ controllers:
     max_start_pose_error: 0.25
     max_anchor_error: 0.4
     joint_limit_margin: 0.03
+    # 推断自两个坐标系镜像的限位；不修改 DCU、其他模式或全局 joint_limits。
+    joint_sign:
+      lumbar_pitch_joint: -1.0
+    # 现场核实腰俯仰方向、标零、限位和锚点 TF 后才可置为 true。
+    sign_calibration_verified: false
 # ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑

@@ -78,6 +78,8 @@ class DanceController final : public ControllerBase {
   std::array<float, kJoints> kd_{};
   std::array<float, kJoints> effort_limit_{};
   std::array<float, kJoints> action_scale_{};
+  // q_policy = sign * (q_dcu - joint_offset); the inverse maps commands to DCU.
+  std::array<float, kJoints> joint_sign_{};
   std::array<float, kObs> mean_{};
   std::array<float, kObs> inv_std_{};
   std::array<float, kObs> observation_{};
@@ -111,6 +113,7 @@ class DanceController final : public ControllerBase {
   float max_start_pose_error_{0.25f};
   float max_anchor_error_{0.4f};
   float joint_limit_margin_{0.03f};
+  bool sign_calibration_verified_{false};
   uint64_t tick_{0};
   size_t frame_index_{0};
   bool active_{false};
