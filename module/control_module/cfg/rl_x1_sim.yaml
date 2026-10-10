@@ -438,7 +438,8 @@ controllers:
                  4.0,   3.3,   3.3,   5.0,   2.5,  2.5]
     obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
     amp_conf:
-      settle_ticks: 50       # 软启动 50 拍 @50Hz = 1.0s（零指令零动作）
+      settle_ticks: 25       # 软启动 25 拍 @50Hz = 0.5s（对齐 sim2sim --settle 0.5）
+      constant_cmd: [1.0, 0.0, 0.0]  # 与真机一致(验收复刻模式); 恢复外部控制删此行
       cmd_x_range: [-0.5, 2.5]
       cmd_y_range: [-0.5, 0.5]
       cmd_yaw_range: [-1.5, 1.5]

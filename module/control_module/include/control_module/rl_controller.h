@@ -97,6 +97,10 @@ class RLController : public ControllerBase {
     double cmd_y_max;
     double cmd_yaw_min;
     double cmd_yaw_max;
+    bool use_constant_cmd{false};  // 验收复刻模式: 恒定指令, 忽略外部 /cmd_vel_limiter
+    double const_cmd_x{0.0};
+    double const_cmd_y{0.0};
+    double const_cmd_z{0.0};
     int sensor_timeout_ms;
     int cmd_timeout_ms;
     double max_tilt_deg;

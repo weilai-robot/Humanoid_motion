@@ -140,6 +140,16 @@ void RLController::Init(const YAML::Node& cfg_node) {
       amp_conf_.cmd_y_max = amp_node["cmd_y_range"] ? amp_node["cmd_y_range"][1].as<double>() : 0.5;
       amp_conf_.cmd_yaw_min = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][0].as<double>() : -1.5;
       amp_conf_.cmd_yaw_max = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][1].as<double>() : 1.5;
+      // 验收复刻模式（可选）: 恒定速度指令, 对齐 sim2sim mujoco_rollout 的
+      // --cmd 常量语义(全程恒定, settle 期间不清零)。设置后外部速度输入被忽略。
+      if (amp_node["constant_cmd"]) {
+        const auto cc = amp_node["constant_cmd"].as<std::vector<double>>();
+        AIMRT_CHECK_ERROR_THROW(cc.size() == 3, "amp_conf.constant_cmd must be [vx, vy, wz]");
+        amp_conf_.use_constant_cmd = true;
+        amp_conf_.const_cmd_x = cc[0];
+        amp_conf_.const_cmd_y = cc[1];
+        amp_conf_.const_cmd_z = cc[2];
+      }
       amp_conf_.sensor_timeout_ms = amp_node["sensor_timeout_ms"] ? amp_node["sensor_timeout_ms"].as<int>() : 100;
       amp_conf_.cmd_timeout_ms = amp_node["cmd_timeout_ms"] ? amp_node["cmd_timeout_ms"].as<int>() : 250;
       amp_conf_.max_tilt_deg = amp_node["max_tilt_deg"] ? amp_node["max_tilt_deg"].as<double>() : 45.0;
@@ -173,12 +183,17 @@ void RLController::Init(const YAML::Node& cfg_node) {
       }
       AIMRT_INFO(
           "RLController amp mode: obs {} x hist {}, act {}, action_scale {}, "
-          "decimation {}, settle {} ticks, cmd x[{},{}] y[{},{}] yaw[{},{}]",
+          "decimation {}, settle {} ticks, cmd x[{},{}] y[{},{}] yaw[{},{}], cmd source: {}",
           onnx_conf_.observations_size, onnx_conf_.num_hist, onnx_conf_.actions_size,
           walk_step_conf_.action_scale, walk_step_conf_.decimation, amp_conf_.settle_ticks,
           amp_conf_.cmd_x_min, amp_conf_.cmd_x_max,
           amp_conf_.cmd_y_min, amp_conf_.cmd_y_max,
-          amp_conf_.cmd_yaw_min, amp_conf_.cmd_yaw_max);
+          amp_conf_.cmd_yaw_min, amp_conf_.cmd_yaw_max,
+          amp_conf_.use_constant_cmd ? "CONSTANT" : "external");
+      if (amp_conf_.use_constant_cmd) {
+        AIMRT_INFO("amp CONSTANT CMD = [{:.2f}, {:.2f}, {:.2f}] (external /cmd_vel_limiter ignored)",
+                   amp_conf_.const_cmd_x, amp_conf_.const_cmd_y, amp_conf_.const_cmd_z);
+      }
     }
   }
   const bool default_lpf = cfg_node["lpf_conf"]["enabled"]
@@ -574,18 +589,29 @@ void RLController::ComputeObservation() {
   if (amp_mode_) {
     // AMP 契约（sim2sim 验证）：每帧 [ang_vel(3), grav(3), cmd(3),
     // jpos_rel(n), jvel(n), last_act(n)]，原始值不缩放（归一化器融合在
-    // ONNX 图内）；无相位时钟项；指令限幅到训练范围；软启动期指令置零。
-    std::shared_lock<std::shared_mutex> lock(joy_mutex_);
-    double vx = joy_data_.linear.x;
-    double vy = joy_data_.linear.y;
-    double wz = joy_data_.angular.z;
-    const int64_t now_ns = duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
-    const int64_t cmd_ns = last_cmd_ns_.load(std::memory_order_acquire);
-    if (amp_settle_remaining_ > 0 || cmd_ns == 0 ||
-        now_ns - cmd_ns > static_cast<int64_t>(amp_conf_.cmd_timeout_ms) * 1'000'000) {
-      vx = 0.0;
-      vy = 0.0;
-      wz = 0.0;
+    // ONNX 图内）；无相位时钟项；指令限幅到训练范围。
+    // 对齐 sim2sim: settle 期间只清动作、不清指令（mujoco_rollout 的 cmd 全程恒定）。
+    double vx = 0.0;
+    double vy = 0.0;
+    double wz = 0.0;
+    if (amp_conf_.use_constant_cmd) {
+      // 验收复刻模式: 恒定指令(如 [1.0,0,0]), 外部 /cmd_vel_limiter 与手柄速度忽略
+      vx = amp_conf_.const_cmd_x;
+      vy = amp_conf_.const_cmd_y;
+      wz = amp_conf_.const_cmd_z;
+    } else {
+      std::shared_lock<std::shared_mutex> lock(joy_mutex_);
+      vx = joy_data_.linear.x;
+      vy = joy_data_.linear.y;
+      wz = joy_data_.angular.z;
+      const int64_t now_ns = duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+      const int64_t cmd_ns = last_cmd_ns_.load(std::memory_order_acquire);
+      if (cmd_ns == 0 ||
+          now_ns - cmd_ns > static_cast<int64_t>(amp_conf_.cmd_timeout_ms) * 1'000'000) {
+        vx = 0.0;
+        vy = 0.0;
+        wz = 0.0;
+      }
     }
     vx = std::max(amp_conf_.cmd_x_min, std::min(amp_conf_.cmd_x_max, vx));
     vy = std::max(amp_conf_.cmd_y_min, std::min(amp_conf_.cmd_y_max, vy));
