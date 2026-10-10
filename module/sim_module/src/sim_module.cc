@@ -2,6 +2,7 @@
 // All rights reserved.
 #include "sim_module/sim_module.h"
 #include <yaml-cpp/yaml.h>
+#include <algorithm>
 #include <cmath>
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 
@@ -100,6 +101,19 @@ bool SimModule::Start() {
     }
     const char* joint_name = mj_id2name(m_, mjOBJ_JOINT, i);
     joint_names_.push_back(std::string(joint_name));
+  }
+
+  // 执行器 → 关节(joint_names_ 下标)映射: ctrl 数组按执行器序, 与关节序可能不一致
+  actuator_to_joint_.assign(m_->nu, -1);
+  for (int a = 0; a < m_->nu; ++a) {
+    const int jid = m_->actuator_trnid[2 * a];  // trnid 每 2 个 int/执行器, [0]=joint id
+    const char* jname = mj_id2name(m_, mjOBJ_JOINT, jid);
+    auto it = std::find(joint_names_.begin(), joint_names_.end(), std::string(jname));
+    if (it != joint_names_.end()) {
+      actuator_to_joint_[a] = static_cast<int>(it - joint_names_.begin());
+    } else {
+      AIMRT_WARN("Actuator {} joint '{}' not in non-free joint list", a, jname);
+    }
   }
 
   // init pid
@@ -248,7 +262,11 @@ void SimModule::WriteMotorCmd(my_ros2_proto::msg::JointCommand cmd) {
   array_t q = Eigen::Map<array_t>(d_->qpos + 7, joint_names_.size());
   array_t dq = Eigen::Map<array_t>(d_->qvel + 6, joint_names_.size());
   motor_torque_ = target_tq_ + (target_q_ - q) * kp_ + (target_dq_ - dq) * kd_;
-  d_->ctrl = motor_torque_.data();
+  // ctrl 按执行器序写入: 力矩数组按关节序, 需经 actuator_to_joint_ 映射
+  for (int a = 0; a < m_->nu; ++a) {
+    const int j = actuator_to_joint_[a];
+    d_->ctrl[a] = (j >= 0) ? motor_torque_(j) : 0.0;
+  }
 
   // 添加控制噪声
   if (sim_->ctrl_noise_std) {

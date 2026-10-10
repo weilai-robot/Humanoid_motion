@@ -78,6 +78,8 @@ class SimModule : public aimrt::ModuleBase {
   array_t kp_;
   array_t kd_;
   array_t motor_torque_;
+  // ctrl 数组按执行器序, 力矩按关节序计算, 需按名字映射 (执行器序≠关节序)
+  std::vector<int> actuator_to_joint_;
 
   // model and data
   mjModel* m_ = nullptr;

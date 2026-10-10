@@ -1,4 +1,4 @@
-model_file: cfg/sim_module/model/mjcf/xyber_x1_flat.xml
+model_file: cfg/sim_module/model/mjcf/xyber_x1_flat_v2.xml
 render_frequecy: 50      # 数据发布频率
 
 sub_reset_sim_topic: /reset_sim
