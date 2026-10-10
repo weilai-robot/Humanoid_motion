@@ -483,15 +483,31 @@ void RLController::LoadModel() {
   if (amp_mode_) {
     AIMRT_CHECK_ERROR_THROW(session_ptr_->GetInputCount() == 1 && session_ptr_->GetOutputCount() == 1,
                             "AMP policy must have one input and one output");
-    const auto in_info = session_ptr_->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
-    const auto out_info = session_ptr_->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    // ORT C++ API 陷阱: ConstTensorTypeAndShapeInfo 是非拥有视图, 底层内存归 TypeInfo 所有。
+    // 必须让 TypeInfo 活过使用点, 否则悬垂读取(free 后被堆元数据覆写)导致校验误报。
+    const auto in_type_info = session_ptr_->GetInputTypeInfo(0);
+    const auto out_type_info = session_ptr_->GetOutputTypeInfo(0);
+    const auto in_info = in_type_info.GetTensorTypeAndShapeInfo();
+    const auto out_info = out_type_info.GetTensorTypeAndShapeInfo();
     const std::vector<int64_t> expected_in{
         1, static_cast<int64_t>(onnx_conf_.observations_size) * onnx_conf_.num_hist};
     const std::vector<int64_t> expected_out{1, onnx_conf_.actions_size};
-    AIMRT_CHECK_ERROR_THROW(in_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-                                out_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
-                                in_info.GetShape() == expected_in && out_info.GetShape() == expected_out,
-                            "ONNX model tensor contract differs from controller configuration");
+    const bool contract_ok = in_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+                             out_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+                             in_info.GetShape() == expected_in && out_info.GetShape() == expected_out;
+    if (!contract_ok) {
+      auto shape_str = [](const std::vector<int64_t>& v) {
+        std::string s;
+        for (size_t i = 0; i < v.size(); ++i) s += (i ? "," : "") + std::to_string(v[i]);
+        return s.empty() ? std::string("<none>") : s;
+      };
+      AIMRT_ERROR("AMP ONNX contract mismatch detail: input type={} shape=[{}], output type={} shape=[{}], "
+                  "expected FLOAT [1,{}] / [1,{}]",
+                  static_cast<int>(in_info.GetElementType()), shape_str(in_info.GetShape()),
+                  static_cast<int>(out_info.GetElementType()), shape_str(out_info.GetShape()),
+                  onnx_conf_.observations_size * onnx_conf_.num_hist, onnx_conf_.actions_size);
+      AIMRT_CHECK_ERROR_THROW(false, "ONNX model tensor contract differs from controller configuration");
+    }
   }
 
   input_names_.clear();
