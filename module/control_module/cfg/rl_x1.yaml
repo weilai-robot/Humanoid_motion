@@ -301,10 +301,14 @@ controllers:
                 right_shoulder_pitch_joint, right_shoulder_roll_joint, right_elbow_pitch_joint, 
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint,
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint]
-    init_state: [0.15,  -0.1,  0.3,   
-                 0.15,  -0.1,  0.3,
-                 0.4,   0.05,  -0.31, 0.49,  -0.21,
-                 -0.4, -0.05,  0.31,  0.49,  -0.21]
+    # 与 rl_walk_amp 的 default_q(训练 init)对齐: 深蹲在 kp300 位置模式下完成
+    # (2s 线性 ramp), 进 AMP 时姿态差≈0, 过渡段不再有蹲移动作(实机后倒问题修复)。
+    # ⚠ 连带影响: legacy walk_leg/walk_leg_arm 的 init_state 仍为旧 stand 位形,
+    #   从 stand 进 legacy walk 会有 ~0.14rad 膝跳变(legacy RL 无过渡混合), 该路径勿用。
+    init_state: [0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,
+                 0.48891,  0.06213, -0.33853, 0.63204, -0.27224,
+                 -0.48891, -0.06213,  0.33853, 0.63204, -0.27224]
     stiffness:  [80.0,  80.0,  80.0,
                  80.0,  80.0,  80.0,
                  300.0, 300.0, 300.0, 300.0, 300.0,
