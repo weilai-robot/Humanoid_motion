@@ -238,8 +238,12 @@ bool DcuDriverModule::InitTransmission(YAML::Node& cfg_node) {
             name, param_path, actr_left_data, actr_right_data, joint_pitch_data, joint_roll_data);
         transmission_.RegisterTransmission(trans);
       } else {
-        auto trans = new RightAnkleParallelTransmission(
-            name, param_path, actr_left_data, actr_right_data, joint_pitch_data, joint_roll_data);
+        // direction_pitch: pitch 关节坐标系方向(默认 1.0), 用于对齐训练模型约定
+        double direction_pitch =
+            node["direction_pitch"] ? node["direction_pitch"].as<double>() : 1.0;
+        auto trans = new RightAnkleParallelTransmission(name, param_path, actr_left_data,
+                                                        actr_right_data, joint_pitch_data,
+                                                        joint_roll_data, direction_pitch);
         transmission_.RegisterTransmission(trans);
       }
       // AIMRT_DEBUG(

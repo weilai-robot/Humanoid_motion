@@ -262,7 +262,7 @@ transmission:                               # 传动层配置
     type: SimpleTransmission
     joint: right_elbow_pitch_joint
     actuator: right_elbow_pitch_actuator
-    direction: -1.0
+    direction: 1.0    # 翻转为训练模型(29DOF PM URDF)约定, 原值 -1.0
 
   - name: right_elbow_yaw_trans
     type: SimpleTransmission
@@ -368,4 +368,5 @@ transmission:                               # 传动层配置
     actuator_right: right_ankle_right_actuator    # 绑定的 右侧连杆执行器
     direction_left: 1.0                           # 左侧连杆执行器的方向
     direction_right: 1.0                          # 右侧连杆执行器的方向
+    direction_pitch: -1.0                         # pitch 关节坐标翻转为训练模型约定(roll 不变)
     param_path: cfg/dcu_driver_module/ankle_trans_x1.yaml  # 其他配置参数

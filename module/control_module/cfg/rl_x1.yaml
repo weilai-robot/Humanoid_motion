@@ -162,14 +162,14 @@ joint_limits:
     lower: -2.5
     upper: 1.5
   right_shoulder_roll_joint:
-    lower: 0
-    upper: 2
+    lower: -2
+    upper: 0
   right_shoulder_yaw_joint:
     lower: -1.8
     upper: 1.8
   right_elbow_pitch_joint:
-    lower: -2
-    upper: 0
+    lower: 0
+    upper: 2
   right_elbow_yaw_joint:
     lower: -1.8
     upper: 1.8
@@ -381,7 +381,7 @@ controllers:
     joint_list: [left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint, left_shoulder_pitch_joint,
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint, right_shoulder_pitch_joint]
     init_state: [0.4,  0.05, -0.31, 0.49, -0.21, 0.0,  0.15,
-                -0.4, -0.05,  0.31, 0.49,  0.21, 0.0, -0.15]
+                -0.4, -0.05,  0.31, 0.49, -0.21, 0.0,  0.15]
     stiffness:  [60.0, 60.0, 40.0,  80.0, 40.0,  30.0, 20.0,
                  60.0, 60.0, 40.0,  80.0, 40.0,  30.0, 20.0]
     damping:    [6.0,  3.0,  3.0,   4.0,  2.0,   2.0,  3.0,
