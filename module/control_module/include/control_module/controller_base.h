@@ -1,5 +1,8 @@
 #pragma once
 #include <yaml-cpp/yaml.h>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <map>
 #include <mutex>
 #include <shared_mutex>
@@ -56,6 +59,10 @@ class ControllerBase {
   my_ros2_proto::msg::JointCommand actuator_cmd_data_;
   sensor_msgs::msg::JointState actuator_state_data_;
   std::vector<std::string> actuator_names_;
+  // Monotonic receive times. AMP uses these to reject missing/stale feedback.
+  std::atomic<int64_t> last_joint_state_ns_{0};
+  std::atomic<int64_t> last_imu_ns_{0};
+  std::atomic<int64_t> last_cmd_ns_{0};
   // // other
   // bool is_first_frame_{true};
 };

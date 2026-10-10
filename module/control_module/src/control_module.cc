@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <ctime>
 #include <pthread.h>
+#include <utility>
 
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "control_module/global.h"
@@ -74,7 +75,22 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         subs_.push_back(core_.GetChannelHandle().GetSubscriber(trigger_topic));
         bool ret = aimrt::channel::Subscribe<std_msgs::msg::Float32>(subs_.back(),
           [this, trigger_topic](const std::shared_ptr<const std_msgs::msg::Float32>& msg) {
-            if (Throttler(high_resolution_clock::now(), last_trigger_time_, milliseconds(1000)) && state_machine_.OnEvent(trigger_topic)) {
+            std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
+            if (trigger_topic == "/amp_mode") {
+              const auto it = controller_map_.find("rl_walk_amp");
+              const auto amp = it == controller_map_.end()
+                                   ? nullptr : std::dynamic_pointer_cast<RLController>(it->second);
+              if (!amp || !amp->AmpReady()) {
+                AIMRT_ERROR("AMP entry rejected: joint state or IMU is missing/stale");
+                return;
+              }
+            }
+            const auto trigger_now = high_resolution_clock::now();
+            const bool amp_exit = state_machine_.GetCurrentState() == "walk_amp" &&
+                                  (trigger_topic == "/keep_mode" || trigger_topic == "/idle_mode");
+            if ((amp_exit || Throttler(trigger_now, last_trigger_time_, milliseconds(1000))) &&
+                state_machine_.OnEvent(trigger_topic)) {
+              if (amp_exit) last_trigger_time_ = trigger_now;
               auto now_state = state_machine_.GetCurrentState();
               auto controller_names = state_machine_.GetCurrentControllerNames();
               for (auto name : controller_names) {
@@ -110,6 +126,7 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         if (cfg_node["joint_limits"]) {
           iter->second["joint_limits"] = cfg_node["joint_limits"];
         }
+        iter->second["control_frequency_hz"] = freq_;
         controller_map_[controller_name]->Init(iter->second);
 
       }
@@ -153,17 +170,29 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       subs_.push_back(core_.GetChannelHandle().GetSubscriber(cfg_node["sub_joint_state_name"].as<std::string>()));
       ret &= aimrt::channel::Subscribe<sensor_msgs::msg::JointState>(subs_.back(), 
         [this](const std::shared_ptr<const sensor_msgs::msg::JointState>& msg) {
-          // 仅初始化一次 joint_state_index_map_
-          if (joint_state_index_map_.begin()->second == -1) {
-            for (size_t i = 0; i < msg->name.size(); i++) {
-              joint_state_index_map_[msg->name[i]] = i;
+          std::lock_guard<std::mutex> map_lock(joint_state_map_mutex_);
+          if (msg->position.size() < msg->name.size() ||
+              msg->velocity.size() < msg->name.size() ||
+              msg->effort.size() < msg->name.size()) return;
+          // Rebuild on a changed name order; never index a missing joint through operator[].
+          if (msg->name != joint_state_names_) {
+            std::unordered_map<std::string, int> new_map;
+            for (size_t i = 0; i < msg->name.size(); ++i) {
+              new_map[msg->name[i]] = static_cast<int>(i);
             }
+            for (const auto& [name, unused] : joint_state_index_map_) {
+              if (new_map.find(name) == new_map.end()) return;
+            }
+            joint_state_index_map_ = std::move(new_map);
+            joint_state_names_ = msg->name;
           }
 
           // 新设置的 offset
           sensor_msgs::msg::JointState temp_msg = *msg;
           for (const auto& joint : joint_offset_map_) {
-            temp_msg.position[joint_state_index_map_.at(joint.first)] -= joint.second;
+            const auto it = joint_state_index_map_.find(joint.first);
+            if (it == joint_state_index_map_.end()) return;
+            temp_msg.position[it->second] -= joint.second;
           }
 
           for (const auto& controller : controller_map_) {
@@ -301,22 +330,45 @@ bool ControlModule::MainLoop() {
           duration_cast<microseconds>(wake_tp - next_iteration_time).count();
       const auto body_t0 = high_resolution_clock::now();
 
-      auto controller_names = state_machine_.GetCurrentControllerNames();
-      for (const auto& name : controller_names) {
-        controller_map_[name]->Update();
-        my_ros2_proto::msg::JointCommand tmp_cmd = controller_map_[name]->GetJointCmdData();
-        // 将 tmp_cmd 中的数据复制到 cmd_msg 中
-        for (size_t ii = 0; ii < tmp_cmd.name.size(); ii++) {
-          int index = joint_cmd_index_map_[tmp_cmd.name[ii].c_str()];
-          cmd_msg.name[index] = tmp_cmd.name[ii];
-          cmd_msg.position[index] = tmp_cmd.position[ii] + joint_offset_map_[tmp_cmd.name[ii]];
-          cmd_msg.velocity[index] = tmp_cmd.velocity[ii];
-          cmd_msg.effort[index] = tmp_cmd.effort[ii];
-          cmd_msg.damping[index] = tmp_cmd.damping[ii];
-          cmd_msg.stiffness[index] = tmp_cmd.stiffness[ii];
+      {
+        std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
+        bool amp_fault = false;
+        auto controller_names = state_machine_.GetCurrentControllerNames();
+        for (const auto& name : controller_names) {
+          const auto& controller = controller_map_.at(name);
+          controller->Update();
+          const auto amp = std::dynamic_pointer_cast<RLController>(controller);
+          if (amp && amp->IsAmpMode() && amp->AmpFaulted()) {
+            amp_fault = true;
+            break;
+          }
+          my_ros2_proto::msg::JointCommand tmp_cmd = controller->GetJointCmdData();
+          // 将 tmp_cmd 中的数据复制到 cmd_msg 中
+          for (size_t ii = 0; ii < tmp_cmd.name.size(); ii++) {
+            const int index = joint_cmd_index_map_.at(tmp_cmd.name[ii]);
+            cmd_msg.name[index] = tmp_cmd.name[ii];
+            cmd_msg.position[index] = tmp_cmd.position[ii] + joint_offset_map_.at(tmp_cmd.name[ii]);
+            cmd_msg.velocity[index] = tmp_cmd.velocity[ii];
+            cmd_msg.effort[index] = tmp_cmd.effort[ii];
+            cmd_msg.damping[index] = tmp_cmd.damping[ii];
+            cmd_msg.stiffness[index] = tmp_cmd.stiffness[ii];
+          }
+        }
+        if (amp_fault) {
+          // Stop applying a stale/nonfinite policy output. The keep controller
+          // starts from the last measured pose; operator must diagnose/e-stop.
+          if (state_machine_.OnEvent("/keep_mode")) {
+            for (const auto& name : state_machine_.GetCurrentControllerNames()) {
+              controller_map_.at(name)->RestartController();
+            }
+            last_state_name_ = state_machine_.GetCurrentState();
+            UpdateRlLoggingState(last_state_name_);
+            AIMRT_ERROR("AMP fault: switched to keep mode (feedback, tilt or policy output)");
+          }
+        } else {
+          aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);
         }
       }
-      aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);
 
       // ── R5: 本周期体耗时 + 直方图更新（O(1)，无锁无 IO）──
       const int64_t body_us =

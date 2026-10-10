@@ -46,7 +46,7 @@ robot_states:
     pre_states: [stand_&_plan, walk_leg_&_plan, stand, walk_leg]
     controllers: [pd_zero, pd_stand, rl_walk_leg_shoulder]
 
-  # AMP全身行走模式（x1_29_AMP v46s soup 策略，29DOF）
+  # AMP全身行走模式（x1_29_AMP soup59c_50，50Hz，29DOF）
   walk_amp:
     trigger_topic: /amp_mode
     pre_states: [stand, stand_&_plan, walk_amp]
@@ -356,7 +356,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg.onnx
+      policy_file: cfg/control_module/policy/archive/rl_walk_leg.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66
@@ -396,7 +396,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_shoulder.onnx
+      policy_file: cfg/control_module/policy/archive/rl_walk_leg_shoulder.onnx
       actions_size: 14
       observations_size: 53
       num_hist: 66
@@ -413,7 +413,7 @@ controllers:
         - right_ankle_pitch_joint
         - right_ankle_roll_joint
 
-  # AMP 全身行走（x1_29_AMP v46s model soup, 29DOF）— 与 rl_x1.yaml 同契约
+  # AMP 全身行走（x1_29_AMP soup59c_50，50Hz，29DOF）— 与 rl_x1.yaml 同契约
   rl_walk_amp:
     joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
                 left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
@@ -441,6 +441,10 @@ controllers:
       cmd_x_range: [-0.5, 2.5]
       cmd_y_range: [-0.5, 0.5]
       cmd_yaw_range: [-1.5, 1.5]
+      sensor_timeout_ms: 100
+      cmd_timeout_ms: 250
+      max_tilt_deg: 45.0
+      ankle_effort_limit: 80.0
     walk_step_conf:
       action_scale: 0.25     # q_target = default_q + 0.25 * action
       decimation: 20         # 1000Hz / 20 = 50Hz 策略频率（训练 CONTROL_DT=0.02）
@@ -454,7 +458,7 @@ controllers:
       dof_vel: 1.
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/x1_amp_v46s_soup.onnx
+      policy_file: cfg/control_module/policy/x1_amp_soup59c_50hz.onnx
       actions_size: 29
       observations_size: 96   # 9 + 3*29
       num_hist: 3
@@ -463,6 +467,8 @@ controllers:
       inter_op_threads: 1
       intra_op_threads: 1
     lpf_conf:
+      position_enabled: false
+      effort_enabled: false
       wc: 100.
       ts: 0.001
       paralle_list:

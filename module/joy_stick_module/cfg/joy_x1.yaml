@@ -25,6 +25,10 @@ float_pubs:
     buttons: [2]
   - topic_name: /walk_mode2
     buttons: [3]
+  # AMP 全身行走: 须从 stand 进入(stand_mode 键站稳后按);
+  # 小脑侧有 AmpReady 入口检查(关节/IMU 反馈新鲜), 反馈异常时按键无效
+  - topic_name: /amp_mode
+    buttons: [8]   # Guide/大圆键; 若手柄不报 8 号键(部分蓝牙驱动), 改 9 或 10(摇杆下压)
   - topic_name: /keep_mode
     buttons: [6]
   - topic_name: /plan_mode
@@ -47,6 +51,8 @@ twist_pubs:
       linear-y: 0
       angular-z: 3
     # twist的线速度和角速度限制
+    # AMP 训练范围为 vx[-0.5,2.5] vy[-0.5,0.5] wz[-1.5,1.5]（小脑侧二次限幅兜底）;
+    # 吊架/首测阶段保持保守限幅, 地面验证通过后再按需放宽 ub[0]
     velocity_limit_lb: [-0.5, -0.3, -0.5]
     velocity_limit_ub: [0.5, 0.3, 0.5]
     # 固定速度（可选）：设置后忽略摇杆轴，使用以下固定值行走
@@ -55,13 +61,25 @@ twist_pubs:
 
 #######################    小脑行走测试：   #######################
     # 小脑行走测试：
-    constant_velocity:
-      linear-x: 0.4
-      linear-y: 0.0
-      angular-z: 0.0
+    # 已注释: 固速 0.4 直行会忽略摇杆轴, 且持续抢占 /cmd_vel_limiter;
+    # AMP 手柄操作需摇杆控制, 恢复固定速度测试时再解开
+    # constant_velocity:
+    #   linear-x: 0.4
+    #   linear-y: 0.0
+    #   angular-z: 0.0
 #######################    大脑导航测试：   #######################
     # 大脑导航测试：
     # constant_velocity:
     #   linear-x: 0.6
     #   linear-y: 0.0
     #   angular-z: 0.0
+
+#######################    AMP 手柄操作：   #######################
+# 进入:  zero(B) → stand(A) 站稳 → Guide(8) 进 AMP → 保持零速 ≥1s(软启动)
+# 控制:  按住 LB(4) + 左摇杆(前后=前进后退, 左右=平移), 右摇杆左右=转向
+# 退出:  A(0)=stand_mode 或 Back(6)=keep_mode, AMP 内两者立即生效(无 1s 节流)
+# 安全:  松开 LB 后 /cmd_vel_limiter 停发, 小脑 250ms 超时自动归零(等效死区);
+#        反馈断流/倾角超限/推理异常时小脑自动切 keep, 物理急停始终独立可用
+# ⚠ RT(右扳机)在 AMP 模式下不会切换状态(walk_leg 不接受 walk_amp 前置),
+#   但其 IMU 闭环速度(0.4m/s 前进)仍会绕过 LB 发布 —— AMP 中勿按 RT;
+#   误按后可用 LT(左扳机)触发 5s 匀减速刹停(结束自动回 stand)

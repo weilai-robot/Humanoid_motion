@@ -30,6 +30,9 @@ class RLController : public ControllerBase {
 
   void SetLoggingActive(bool active);
   void StopLoggingWorker();
+  bool IsAmpMode() const { return amp_mode_; }
+  bool AmpReady() const;
+  bool AmpFaulted() const { return amp_fault_.load(std::memory_order_acquire); }
 
  private:
   void LoadModel();
@@ -76,10 +79,12 @@ class RLController : public ControllerBase {
   struct LPFConf {
     double wc;
     double ts;
+    bool position_enabled;
+    bool effort_enabled;
     std::set<std::string> paralle_list;
   } lpf_conf_;
 
-  // AMP 全身策略部署适配（x1_29_AMP / v46s 契约）：
+  // AMP 全身策略部署适配（x1_29_AMP / soup59c_50 契约）：
   //   obs 每帧 96 维 = [ang_vel(3), projected_gravity(3), cmd(3),
   //                     joint_pos_rel(n), joint_vel(n), last_action(n)]，n=29
   //   历史按 term-major 展开（每项 num_hist 帧 oldest-first 拼接），
@@ -92,14 +97,23 @@ class RLController : public ControllerBase {
     double cmd_y_max;
     double cmd_yaw_min;
     double cmd_yaw_max;
+    int sensor_timeout_ms;
+    int cmd_timeout_ms;
+    double max_tilt_deg;
+    double ankle_effort_limit;
   } amp_conf_;
   bool amp_mode_{false};
   int amp_settle_remaining_{0};
+  int amp_transition_elapsed_{0};
+  vector_t amp_transition_start_pos_;
+  std::atomic_bool amp_fault_{false};
 
   std::unique_ptr<Ort::Session> session_ptr_;
   Ort::MemoryInfo memory_info_;
   std::vector<const char*> input_names_;
   std::vector<const char*> output_names_;
+  std::vector<std::string> input_name_storage_;
+  std::vector<std::string> output_name_storage_;
   std::vector<std::vector<int64_t>> input_shapes_;
   std::vector<std::vector<int64_t>> output_shapes_;
 

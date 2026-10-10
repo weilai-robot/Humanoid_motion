@@ -45,7 +45,7 @@ robot_states:
     pre_states: [stand_&_plan, walk_leg_&_plan, stand, walk_leg]
     controllers: [pd_zero, pd_stand, rl_walk_leg_shoulder]
 
-  # AMP全身行走模式（x1_29_AMP v46s soup 策略，29DOF）
+  # AMP全身行走模式（x1_29_AMP soup59c_50，50Hz，29DOF）
   walk_amp:
     trigger_topic: /amp_mode
     pre_states: [stand, stand_&_plan, walk_amp]
@@ -353,7 +353,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_7500_new.onnx
+      policy_file: cfg/control_module/policy/rl_walk_leg_20260901_step7500.onnx
       actions_size: 12
       observations_size: 47
       num_hist: 66
@@ -393,7 +393,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/rl_walk_leg_shoulder.onnx
+      policy_file: cfg/control_module/policy/archive/rl_walk_leg_shoulder.onnx
       actions_size: 14
       observations_size: 53
       num_hist: 66
@@ -410,7 +410,7 @@ controllers:
         - right_ankle_pitch_joint
         - right_ankle_roll_joint
 
-  # AMP 全身行走（x1_29_AMP v46s model soup, 29DOF）
+  # AMP 全身行走（x1_29_AMP soup59c_50，50Hz，29DOF）
   # 契约: obs 96维/帧 x 3帧 term-major, 50Hz 策略, q = default_q + 0.25*action
   # 关节序 = 训练 LAB_DOF_ORDER（与顶层 joint_list 一致）
   rl_walk_amp:
@@ -442,6 +442,10 @@ controllers:
       cmd_x_range: [-0.5, 2.5]    # 训练指令范围（超出限幅）
       cmd_y_range: [-0.5, 0.5]
       cmd_yaw_range: [-1.5, 1.5]
+      sensor_timeout_ms: 100  # IMU/关节反馈超过 100ms 则退出 AMP 到 keep
+      cmd_timeout_ms: 250     # 速度指令超时归零
+      max_tilt_deg: 45.0      # 重力方向倾角保护
+      ankle_effort_limit: 80.0 # 训练侧踝关节力矩上限（joint Nm）
     walk_step_conf:
       action_scale: 0.25     # q_target = default_q + 0.25 * action
       decimation: 20         # 1000Hz / 20 = 50Hz 策略频率（训练 CONTROL_DT=0.02）
@@ -455,7 +459,7 @@ controllers:
       dof_vel: 1.
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/x1_amp_v46s_soup.onnx
+      policy_file: cfg/control_module/policy/x1_amp_soup59c_50hz.onnx
       actions_size: 29
       observations_size: 96   # 9 + 3*29（每帧 ang3+grav3+cmd3+jpos29+jvel29+act29）
       num_hist: 3
@@ -464,7 +468,9 @@ controllers:
       inter_op_threads: 1
       intra_op_threads: 1
     lpf_conf:
-      wc: 100.               # 二阶 Butterworth（rad/s, ~15.9Hz）；F1 硬件平滑，如跟踪差可调大
+      position_enabled: false # 50Hz 训练和 sim2sim 均无动作 LPF
+      effort_enabled: false   # 踝力矩同样直通；仅在实测噪声后独立调整
+      wc: 100.               # 保留给可选 LPF；启用前需重新做闭环验证
       ts: 0.001
       paralle_list:          # 踝并联电机走 effort 模式（F1 硬件结构）
         - left_ankle_pitch_joint

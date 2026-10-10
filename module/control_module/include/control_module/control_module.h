@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <fstream>
 #include <filesystem>
@@ -45,6 +46,8 @@ class ControlModule : public aimrt::ModuleBase {
   std::set<std::string> trigger_topics_;//// 添加重复的 trigger_topic 会报错，这里用 set 来存储
   std::map<std::string, std::shared_ptr<ControllerBase>> controller_map_;
   std::unordered_map<std::string, int> joint_state_index_map_;
+  std::vector<std::string> joint_state_names_;
+  std::mutex joint_state_map_mutex_;
   std::unordered_map<std::string, int> joint_cmd_index_map_;
   std::map<std::string, double> joint_offset_map_;
 
@@ -56,6 +59,7 @@ class ControlModule : public aimrt::ModuleBase {
   time_point<high_resolution_clock> last_trigger_time_;
 
   std::string last_state_name_;
+  std::mutex control_loop_mutex_;  // Serialize mode changes with controller Update/GetJointCmdData.
 
   // ── R5 控制周期统计：MainLoop(RT,1kHz) 写直方图双缓冲，StatsWorker(非RT) 每10s 读出落盘 ──
   struct PeriodHist {

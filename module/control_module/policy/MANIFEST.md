@@ -1,6 +1,6 @@
 # policy 模型台账
 
-- 外层 = policy/ 根目录中的模型为活跃模型
+- 外层 = policy/ 根目录中的模型为当前或可回退模型；是否加载由 YAML `policy_file` 决定
 - 内层（aichive) = 历史模型
 
 ## 活跃模型
@@ -10,6 +10,13 @@
 | rl\_walk\_leg\_20260901\_step7500.onnx | 参数辨识+低抬步态模型，可实现前进、停止、横移、转向               |
 | rl\_walk\_leg\_20260818\_step5999.onnx | 基于源码训练5999轮模型，可实现前进、后退、停止、横移、转向，用于视频拍摄模型 |
 
+## AMP 模型
+
+| 文件 | 状态与来源 |
+|---|---|
+| `x1_amp_soup59c_50hz.onnx` | `rl_walk_amp` 当前使用；从 X1_29_AMP 的 `acceptance/v59c_eval/soup59c_50.policy.npz` 导出，50 Hz、29DOF；SHA256 `3e09b76f1e38085a2093abccc1e6f80c86751c9758f7f21d0f497163c99ebd00` |
+| `x1_amp_v46s_soup.onnx` | 上一版 50 Hz AMP 部署模型，保留作回退 |
+
 ## 历史模型
 
 | 文件名                                    | 来源                   |
@@ -17,4 +24,3 @@
 | rl\_walk\_leg\_20260723\_step5000.onnx | 基于源码训练5000轮模型，用于陈总展示 |
 | rl\_walk\_leg.onnx                     | 源码部署仓库携带腿部12dof模型    |
 | rl\_walk\_leg\_shoulder.onnx           | 源码部署仓库携带腿肩协同模型       |
-

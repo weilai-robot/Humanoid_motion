@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <limits>
 #include <sstream>
@@ -120,7 +121,7 @@ void RLController::Init(const YAML::Node& cfg_node) {
   lpf_conf_.paralle_list = std::set<std::string>(paralle_list.begin(), paralle_list.end());
 
   // AMP 全身策略模式（可选，缺省 legacy 保持旧策略行为不变）。
-  // 契约来源：x1_29_AMP sim2sim/deploy_onnx_rt.py + mujoco_rollout.py（v46s 验证）。
+  // 契约来源：x1_29_AMP sim2sim/deploy_onnx_rt.py + mujoco_rollout.py。
   {
     const std::string obs_layout =
         cfg_node["obs_layout"] ? cfg_node["obs_layout"].as<std::string>() : "legacy";
@@ -139,6 +140,37 @@ void RLController::Init(const YAML::Node& cfg_node) {
       amp_conf_.cmd_y_max = amp_node["cmd_y_range"] ? amp_node["cmd_y_range"][1].as<double>() : 0.5;
       amp_conf_.cmd_yaw_min = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][0].as<double>() : -1.5;
       amp_conf_.cmd_yaw_max = amp_node["cmd_yaw_range"] ? amp_node["cmd_yaw_range"][1].as<double>() : 1.5;
+      amp_conf_.sensor_timeout_ms = amp_node["sensor_timeout_ms"] ? amp_node["sensor_timeout_ms"].as<int>() : 100;
+      amp_conf_.cmd_timeout_ms = amp_node["cmd_timeout_ms"] ? amp_node["cmd_timeout_ms"].as<int>() : 250;
+      amp_conf_.max_tilt_deg = amp_node["max_tilt_deg"] ? amp_node["max_tilt_deg"].as<double>() : 45.0;
+      amp_conf_.ankle_effort_limit = amp_node["ankle_effort_limit"]
+                                         ? amp_node["ankle_effort_limit"].as<double>() : 80.0;
+      const int control_hz = cfg_node["control_frequency_hz"]
+                                 ? cfg_node["control_frequency_hz"].as<int>() : 1000;
+      AIMRT_CHECK_ERROR_THROW(walk_step_conf_.decimation > 0 && onnx_conf_.num_hist == 3 &&
+                                  onnx_conf_.actions_size == 29 &&
+                                  onnx_conf_.actions_size == static_cast<int>(joint_names_.size()) &&
+                                  std::abs(walk_step_conf_.action_scale - 0.25) < 1e-9 &&
+                                  joint_conf_.init_state.size() == onnx_conf_.actions_size &&
+                                  joint_conf_.stiffness.size() == onnx_conf_.actions_size &&
+                                  joint_conf_.damping.size() == onnx_conf_.actions_size &&
+                                  amp_conf_.settle_ticks >= 0 && amp_conf_.sensor_timeout_ms > 0 &&
+                                  amp_conf_.cmd_timeout_ms > 0 && amp_conf_.max_tilt_deg > 0 &&
+                                  amp_conf_.max_tilt_deg < 90 && amp_conf_.ankle_effort_limit > 0 &&
+                                  control_hz % walk_step_conf_.decimation == 0 &&
+                                  control_hz / walk_step_conf_.decimation == 50,
+                              "Invalid AMP dimensions, rate or safety parameters");
+      for (int ii = 0; ii < onnx_conf_.actions_size; ++ii) {
+        AIMRT_CHECK_ERROR_THROW(std::isfinite(joint_conf_.pos_limit_lower(ii)) &&
+                                    std::isfinite(joint_conf_.pos_limit_upper(ii)) &&
+                                    joint_conf_.pos_limit_lower(ii) < joint_conf_.pos_limit_upper(ii) &&
+                                    joint_conf_.init_state(ii) >= joint_conf_.pos_limit_lower(ii) &&
+                                    joint_conf_.init_state(ii) <= joint_conf_.pos_limit_upper(ii) &&
+                                    std::isfinite(joint_conf_.stiffness(ii)) &&
+                                    std::isfinite(joint_conf_.damping(ii)) &&
+                                    joint_conf_.stiffness(ii) > 0 && joint_conf_.damping(ii) >= 0,
+                                "Invalid AMP joint limits or PD parameters for {}", joint_names_[ii]);
+      }
       AIMRT_INFO(
           "RLController amp mode: obs {} x hist {}, act {}, action_scale {}, "
           "decimation {}, settle {} ticks, cmd x[{},{}] y[{},{}] yaw[{},{}]",
@@ -149,6 +181,12 @@ void RLController::Init(const YAML::Node& cfg_node) {
           amp_conf_.cmd_yaw_min, amp_conf_.cmd_yaw_max);
     }
   }
+  const bool default_lpf = cfg_node["lpf_conf"]["enabled"]
+                               ? cfg_node["lpf_conf"]["enabled"].as<bool>() : !amp_mode_;
+  lpf_conf_.position_enabled = cfg_node["lpf_conf"]["position_enabled"]
+                                   ? cfg_node["lpf_conf"]["position_enabled"].as<bool>() : default_lpf;
+  lpf_conf_.effort_enabled = cfg_node["lpf_conf"]["effort_enabled"]
+                                 ? cfg_node["lpf_conf"]["effort_enabled"].as<bool>() : default_lpf;
 
   LoadModel();
 
@@ -192,6 +230,7 @@ void RLController::Init(const YAML::Node& cfg_node) {
   observations_.resize(onnx_conf_.observations_size * onnx_conf_.num_hist);
   last_actions_.resize(onnx_conf_.actions_size);
   last_actions_.setZero();
+  amp_transition_start_pos_.resize(onnx_conf_.actions_size);
   propri_history_buffer_.resize(onnx_conf_.observations_size * onnx_conf_.num_hist);
   low_pass_filters_.clear();
   for (int i = 0; i < onnx_conf_.actions_size; ++i) {
@@ -205,10 +244,29 @@ void RLController::RestartController() {
   is_first_frame_ = true;
   diag_pending_frame_ = false;
   if (amp_mode_) {
-    // 对齐参考实现 run_hardware()：进入控制器即软启动，历史/动作清零
+    // 50Hz 策略不作常态 LPF；只在模式切换时从实测姿态平滑进入 default_q。
     amp_settle_remaining_ = amp_conf_.settle_ticks;
+    amp_transition_elapsed_ = 0;
+    amp_fault_.store(false, std::memory_order_release);
+    loop_count_ = 0;
     last_actions_.setZero();
+    std::fill(actions_.begin(), actions_.end(), 0.0f);
+    std::shared_lock<std::shared_mutex> lock(joint_state_mutex_);
+    for (int ii = 0; ii < onnx_conf_.actions_size; ++ii) {
+      amp_transition_start_pos_(ii) = joint_state_data_.position[ii];
+    }
   }
+}
+
+bool RLController::AmpReady() const {
+  if (!amp_mode_) return true;
+  const int64_t now_ns = duration_cast<nanoseconds>(
+      steady_clock::now().time_since_epoch()).count();
+  const int64_t max_age_ns = static_cast<int64_t>(amp_conf_.sensor_timeout_ms) * 1'000'000;
+  const int64_t joint_ns = last_joint_state_ns_.load(std::memory_order_acquire);
+  const int64_t imu_ns = last_imu_ns_.load(std::memory_order_acquire);
+  return joint_ns > 0 && imu_ns > 0 && now_ns >= joint_ns && now_ns >= imu_ns &&
+         now_ns - joint_ns <= max_age_ns && now_ns - imu_ns <= max_age_ns;
 }
 
 void RLController::SetLoggingActive(bool active) {
@@ -292,11 +350,35 @@ void RLController::LoggingWorkerLoop() {
 }
 
 void RLController::Update() {
+  if (amp_mode_ && !AmpReady()) {
+    amp_fault_.store(true, std::memory_order_release);
+    std::fill(actions_.begin(), actions_.end(), 0.0f);
+    AIMRT_ERROR("AMP feedback stale or missing");
+    return;
+  }
   UpdateStateEstimation();
+  if (amp_mode_ && propri_.projected_gravity.z() >
+                       -std::cos(amp_conf_.max_tilt_deg * M_PI / 180.0)) {
+    amp_fault_.store(true, std::memory_order_release);
+    std::fill(actions_.begin(), actions_.end(), 0.0f);
+    AIMRT_ERROR("AMP tilt exceeded {} deg", amp_conf_.max_tilt_deg);
+    return;
+  }
 
   if (loop_count_ % walk_step_conf_.decimation == 0) {
     ComputeObservation();
-    ComputeActions();
+    if (amp_mode_) {
+      try {
+        ComputeActions();
+      } catch (const std::exception& e) {
+        std::fill(actions_.begin(), actions_.end(), 0.0f);
+        amp_fault_.store(true, std::memory_order_release);
+        AIMRT_ERROR("AMP ONNX inference failed: {}", e.what());
+        return;
+      }
+    } else {
+      ComputeActions();
+    }
     if (amp_mode_ && amp_settle_remaining_ > 0) {
       // 软启动期：目标角 = default_q，零动作（观测侧 cmd 同拍置零，见 ComputeObservation）
       std::fill(actions_.begin(), actions_.end(), 0.0f);
@@ -324,9 +406,25 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
   joint_cmd.damping.resize(joint_names_.size());
   joint_cmd.stiffness.resize(joint_names_.size());
 
+  double settle_blend = 1.0;
+  if (amp_mode_) {
+    const int total = amp_conf_.settle_ticks * walk_step_conf_.decimation;
+    if (total > 0 && amp_transition_elapsed_ < total) {
+      const double t = static_cast<double>(++amp_transition_elapsed_) / total;
+      settle_blend = t * t * (3.0 - 2.0 * t);
+    }
+  }
+
   for (int ii = 0; ii < onnx_conf_.actions_size; ++ii) {
     const scalar_t pos_des_raw = actions_[ii] * walk_step_conf_.action_scale + joint_conf_.init_state(ii);
     scalar_t pos_des = pos_des_raw;
+    if (amp_mode_ && settle_blend < 1.0) {
+      pos_des = (1.0 - settle_blend) * amp_transition_start_pos_(ii) +
+                settle_blend * joint_conf_.init_state(ii);
+    }
+    if (amp_mode_) {
+      pos_des = std::clamp(pos_des, joint_conf_.pos_limit_lower(ii), joint_conf_.pos_limit_upper(ii));
+    }
     const double stiffness = joint_conf_.stiffness(ii);
     const double damping = joint_conf_.damping(ii);
     pd_pos_des_raw_[ii] = pos_des_raw;
@@ -334,13 +432,10 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
     pd_tau_des_raw_[ii] = std::numeric_limits<double>::quiet_NaN();
     pd_tau_des_lpf_[ii] = std::numeric_limits<double>::quiet_NaN();
 
-    // pos_des = std::max(static_cast<scalar_t>(joint_conf_.pos_limit_lower(ii)),
-    //                   std::min(static_cast<scalar_t>(joint_conf_.pos_limit_upper(ii)), pos_des));
-
     if (lpf_conf_.paralle_list.find(joint_names_[ii]) == lpf_conf_.paralle_list.end()) {
       pd_is_parallel_[ii] = 0;
-      low_pass_filters_[ii].input(pos_des);
-      const double pos_des_lp = low_pass_filters_[ii].output();
+      if (lpf_conf_.position_enabled) low_pass_filters_[ii].input(pos_des);
+      const double pos_des_lp = lpf_conf_.position_enabled ? low_pass_filters_[ii].output() : pos_des;
       pd_pos_des_lpf_[ii] = pos_des_lp;
       joint_cmd.position[ii] = pos_des_lp;
       joint_cmd.velocity[ii] = 0.0;
@@ -349,10 +444,14 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
       joint_cmd.damping[ii] = damping;
     } else {
       pd_is_parallel_[ii] = 1;
-      const double tau_des = stiffness * (pos_des - propri_.joint_pos[ii]) + damping * (0.0 - propri_.joint_vel[ii]);
-      pd_tau_des_raw_[ii] = tau_des;
-      low_pass_filters_[ii].input(tau_des);
-      const double tau_des_lp = low_pass_filters_[ii].output();
+      const double tau_des_raw = stiffness * (pos_des - propri_.joint_pos[ii]) + damping * (0.0 - propri_.joint_vel[ii]);
+      const double tau_des = amp_mode_
+                                 ? std::clamp(tau_des_raw, -amp_conf_.ankle_effort_limit,
+                                              amp_conf_.ankle_effort_limit)
+                                 : tau_des_raw;
+      pd_tau_des_raw_[ii] = tau_des_raw;
+      if (lpf_conf_.effort_enabled) low_pass_filters_[ii].input(tau_des);
+      const double tau_des_lp = lpf_conf_.effort_enabled ? low_pass_filters_[ii].output() : tau_des;
       pd_tau_des_lpf_[ii] = tau_des_lp;
       joint_cmd.position[ii] = 0.0;
       joint_cmd.velocity[ii] = 0.0;
@@ -373,32 +472,52 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
 }
 
 void RLController::LoadModel() {
-  std::shared_ptr<Ort::Env> onnxEnvPrt(new Ort::Env(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxController"));
+  static Ort::Env onnx_env(ORT_LOGGING_LEVEL_WARNING, "LeggedOnnxController");
   Ort::SessionOptions sessionOptions;
   sessionOptions.SetInterOpNumThreads(onnx_conf_.inter_op_threads);
   sessionOptions.SetIntraOpNumThreads(onnx_conf_.intra_op_threads);
   // 禁用算子内空闲 worker 自旋，避免在管家核上持续 busy-wait 产生背景噪声
   sessionOptions.AddConfigEntry("session.intra_op.allow_spinning", "0");
-  session_ptr_ = std::make_unique<Ort::Session>(*onnxEnvPrt, onnx_conf_.policy_file.c_str(), sessionOptions);
+  session_ptr_ = std::make_unique<Ort::Session>(onnx_env, onnx_conf_.policy_file.c_str(), sessionOptions);
+
+  if (amp_mode_) {
+    AIMRT_CHECK_ERROR_THROW(session_ptr_->GetInputCount() == 1 && session_ptr_->GetOutputCount() == 1,
+                            "AMP policy must have one input and one output");
+    const auto in_info = session_ptr_->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    const auto out_info = session_ptr_->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
+    const std::vector<int64_t> expected_in{
+        1, static_cast<int64_t>(onnx_conf_.observations_size) * onnx_conf_.num_hist};
+    const std::vector<int64_t> expected_out{1, onnx_conf_.actions_size};
+    AIMRT_CHECK_ERROR_THROW(in_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+                                out_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT &&
+                                in_info.GetShape() == expected_in && out_info.GetShape() == expected_out,
+                            "ONNX model tensor contract differs from controller configuration");
+  }
 
   input_names_.clear();
   output_names_.clear();
+  input_name_storage_.clear();
+  output_name_storage_.clear();
   input_shapes_.clear();
   output_shapes_.clear();
 
   Ort::AllocatorWithDefaultOptions allocator;
   for (size_t ii = 0; ii < session_ptr_->GetInputCount(); ++ii) {
-    char* tempstring = new char[std::strlen(session_ptr_->GetInputNameAllocated(ii, allocator).get()) + 1];
-    std::strcpy(tempstring, session_ptr_->GetInputNameAllocated(ii, allocator).get());
-    input_names_.push_back(tempstring);
+    auto name = session_ptr_->GetInputNameAllocated(ii, allocator);
+    input_name_storage_.emplace_back(name.get());
     input_shapes_.push_back(session_ptr_->GetInputTypeInfo(ii).GetTensorTypeAndShapeInfo().GetShape());
   }
 
   for (size_t ii = 0; ii < session_ptr_->GetOutputCount(); ++ii) {
-    char* tempstring = new char[std::strlen(session_ptr_->GetOutputNameAllocated(ii, allocator).get()) + 1];
-    std::strcpy(tempstring, session_ptr_->GetOutputNameAllocated(ii, allocator).get());
-    output_names_.push_back(tempstring);
+    auto name = session_ptr_->GetOutputNameAllocated(ii, allocator);
+    output_name_storage_.emplace_back(name.get());
     output_shapes_.push_back(session_ptr_->GetOutputTypeInfo(ii).GetTensorTypeAndShapeInfo().GetShape());
+  }
+  for (const auto& name : input_name_storage_) input_names_.push_back(name.c_str());
+  for (const auto& name : output_name_storage_) output_names_.push_back(name.c_str());
+  if (amp_mode_) {
+    AIMRT_CHECK_ERROR_THROW(input_name_storage_[0] == "obs" && output_name_storage_[0] == "action",
+                            "AMP ONNX tensor names must be obs/action");
   }
 }
 
@@ -424,12 +543,12 @@ void RLController::UpdateStateEstimation() {
     quat.y() = imu_data_.orientation.y;
     quat.z() = imu_data_.orientation.z;
     quat.w() = imu_data_.orientation.w;
-    propri_.imu_quat = quat;
     propri_.imu_accel(0) = imu_data_.linear_acceleration.x;
     propri_.imu_accel(1) = imu_data_.linear_acceleration.y;
     propri_.imu_accel(2) = imu_data_.linear_acceleration.z;
-    matrix_t inverse_rot = GetRotationMatrixFromZyxEulerAngles(QuatToZyx(quat)).inverse();
-    propri_.projected_gravity = inverse_rot * gravity_vector;
+    quat.normalize();
+    propri_.imu_quat = quat;
+    propri_.projected_gravity = quat.conjugate() * gravity_vector;
     propri_.base_euler_xyz = QuatToXyz(quat);
   }
 }
@@ -444,7 +563,10 @@ void RLController::ComputeObservation() {
     double vx = joy_data_.linear.x;
     double vy = joy_data_.linear.y;
     double wz = joy_data_.angular.z;
-    if (amp_settle_remaining_ > 0) {
+    const int64_t now_ns = duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+    const int64_t cmd_ns = last_cmd_ns_.load(std::memory_order_acquire);
+    if (amp_settle_remaining_ > 0 || cmd_ns == 0 ||
+        now_ns - cmd_ns > static_cast<int64_t>(amp_conf_.cmd_timeout_ms) * 1'000'000) {
       vx = 0.0;
       vy = 0.0;
       wz = 0.0;
@@ -495,9 +617,13 @@ void RLController::ComputeObservation() {
   if (is_first_frame_) {
     for (size_t ii = 0; ii < joint_names_.size(); ++ii) {
       if (lpf_conf_.paralle_list.find(joint_names_[ii]) == lpf_conf_.paralle_list.end()) {
-        low_pass_filters_[ii].init(propri_.joint_pos[ii]);
+        if (lpf_conf_.position_enabled) {
+          low_pass_filters_[ii].init(propri_.joint_pos[ii]);
+        }
       } else {
-        low_pass_filters_[ii].init(0);
+        if (lpf_conf_.effort_enabled) {
+          low_pass_filters_[ii].init(0);
+        }
       }
     }
 
@@ -561,6 +687,11 @@ void RLController::ComputeActions() {
 
   for (int i = 0; i < onnx_conf_.actions_size; ++i) {
     actions_[i] = *(output_values[0].GetTensorMutableData<float>() + i);
+    if (!std::isfinite(actions_[i])) {
+      std::fill(actions_.begin(), actions_.end(), 0.0f);
+      amp_fault_.store(true, std::memory_order_release);
+      return;
+    }
   }
 
   const scalar_t action_min = -onnx_conf_.actions_clip;
