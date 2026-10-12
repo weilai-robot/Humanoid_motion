@@ -304,11 +304,12 @@ controllers:
                 right_shoulder_pitch_joint, right_shoulder_roll_joint, right_elbow_pitch_joint, 
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint,
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint]
-    # 与 rl_walk_amp 的 default_q 对齐(同 rl_x1.yaml, 见其注释)
+    # 浅蹲静态稳定位形(同 rl_x1.yaml, 见其注释): kp300 下任意时长驻留,
+    # 进 AMP 由策略动态接管(settle=0); 勿改回 default_q 深蹲(静态必倾覆)
     init_state: [0.0,   0.0,   0.0,
                  0.0,   0.0,   0.0,
-                 0.48891,  0.06213, -0.33853, 0.63204, -0.27224,
-                 -0.48891, -0.06213,  0.33853, 0.63204, -0.27224]
+                 0.4,   0.05,  -0.31, 0.49,  -0.21,
+                 -0.4, -0.05,  0.31,  0.49,  -0.21]
     stiffness:  [300.0, 300.0, 300.0,
                  300.0, 300.0, 300.0,
                  250.0, 250.0, 250.0, 250.0, 200.0,
@@ -438,9 +439,8 @@ controllers:
                  4.0,   3.3,   3.3,   5.0,   2.5,  2.5]
     obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
     amp_conf:
-      settle_ticks: 25       # 0.5s=验收验证值。根因定案: default_q 静态保持>1.5s必倾覆
-                             # (harness实测 0.5/1.0/1.5s存活, 2.0s倒), 驻留超窗=接管必倒;
-                             # 规程: stand 2s ramp 完成后 0.5s 内进 AMP, 总驻留<1.5s
+      settle_ticks: 0        # 策略 tick0 即接管(零静持): harness 实测 default_q 静持>1.5s 必倾覆,
+                        # 且增益无关(kpx10+无限力矩仍倒); 从浅蹲 stand 位形动态接管已验证
       constant_cmd: [1.0, 0.0, 0.0]  # 与真机一致(验收复刻模式); 恢复外部控制删此行
       cmd_x_range: [-0.5, 2.5]
       cmd_y_range: [-0.5, 0.5]
