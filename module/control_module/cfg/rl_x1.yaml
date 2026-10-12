@@ -48,7 +48,7 @@ robot_states:
   # AMP全身行走模式（x1_29_AMP soup59c_50，50Hz，29DOF）
   walk_amp:
     trigger_topic: /amp_mode
-    pre_states: [stand, stand_&_plan, walk_amp]
+    pre_states: [stand, stand_&_plan]  # 拒绝 Guide 长按导致 AMP 重入/清历史
     controllers: [pd_zero, pd_stand, rl_walk_amp]
 
   # plan模式
@@ -416,30 +416,36 @@ controllers:
 
   # AMP 全身行走（x1_29_AMP soup59c_50，50Hz，29DOF）
   # 契约: obs 96维/帧 x 3帧 term-major, 50Hz 策略, q = default_q + 0.25*action
-  # 关节序 = 训练 LAB_DOF_ORDER（与顶层 joint_list 一致）
+  # 策略顺序 = 训练 x1.yaml lab_dof_names（Isaac Lab 交错顺序）
+  # 顶层/DCU 仍为串行顺序，ControllerBase/ControlModule 按名称归并
   rl_walk_amp:
-    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
-                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
-                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
-                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
-                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
+                 left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
+                 left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,
+                 left_knee_pitch_joint, left_shoulder_pitch_joint, right_shoulder_pitch_joint,
+                 right_knee_pitch_joint, left_ankle_pitch_joint, left_shoulder_roll_joint,
+                 right_shoulder_roll_joint, right_ankle_pitch_joint, left_ankle_roll_joint,
+                 left_shoulder_yaw_joint, right_shoulder_yaw_joint, right_ankle_roll_joint,
+                 left_elbow_pitch_joint, right_elbow_pitch_joint, left_elbow_yaw_joint,
+                 right_elbow_yaw_joint, left_wrist_pitch_joint, right_wrist_pitch_joint,
+                 left_wrist_roll_joint, right_wrist_roll_joint]
     # 训练 default_q（Isaac X1_CFG init joint pos，sim2sim 已验证）
-    init_state: [0.0,   0.0,   0.0,
-                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
-                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
-                 0.48891,  0.06213, -0.33853, 0.63204, -0.27224, 0.0,
-                 -0.48891, -0.06213,  0.33853, 0.63204, -0.27224, 0.0]
+    init_state: [0.48891, 0.0, -0.48891, 0.06213, 0.0, -0.06213,
+                 -0.33853, 0.0, 0.33853, 0.63204, 0.0, 0.0,
+                 0.63204, -0.27224, 0.0, 0.0, -0.27224, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0]
     # 训练 PD（X1_CFG stiffness/damping，Isaac 验证）
-    stiffness:  [120.0, 120.0, 150.0,
-                 40.0,  40.0,  40.0,  30.0,  20.0, 15.0, 15.0,
-                 40.0,  40.0,  40.0,  30.0,  20.0, 15.0, 15.0,
-                 120.0, 100.0, 100.0, 150.0, 50.0,  50.0,
-                 120.0, 100.0, 100.0, 150.0, 50.0,  50.0]
-    damping:    [4.0,   4.0,   5.0,
-                 2.0,   2.0,   2.0,   1.5,   1.0,  1.0,  1.0,
-                 2.0,   2.0,   2.0,   1.5,   1.0,  1.0,  1.0,
-                 4.0,   3.3,   3.3,   5.0,   2.5,  2.5,
-                 4.0,   3.3,   3.3,   5.0,   2.5,  2.5]
+    stiffness: [120.0, 120.0, 120.0, 100.0, 120.0, 100.0,
+                100.0, 150.0, 100.0, 150.0, 40.0, 40.0,
+                150.0, 50.0, 40.0, 40.0, 50.0, 50.0,
+                40.0, 40.0, 50.0, 30.0, 30.0, 20.0,
+                20.0, 15.0, 15.0, 15.0, 15.0]
+    damping: [4.0, 4.0, 4.0, 3.3, 4.0, 3.3,
+              3.3, 5.0, 3.3, 5.0, 2.0, 2.0,
+              5.0, 2.5, 2.0, 2.0, 2.5, 2.5,
+              2.0, 2.0, 2.5, 1.5, 1.5, 1.0,
+              1.0, 1.0, 1.0, 1.0, 1.0]
     obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
     amp_conf:
       settle_ticks: 0        # 策略 tick0 即接管(零静持): harness 实测 default_q 静持>1.5s 必倾覆,

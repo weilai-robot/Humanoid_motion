@@ -75,9 +75,9 @@ twist_pubs:
     #   angular-z: 0.0
 
 #######################    AMP 手柄操作：   #######################
-# 进入:  zero(B) → stand(A) 站稳 → Guide(8) 进 AMP → 保持零速 ≥1s(软启动)
+# 进入:  zero(B) → stand(A) 站稳 → Guide(8) 进 AMP → 保持零速 ≥1s 观察(策略立即接管，无软启动)
 # 控制:  按住 LB(4) + 左摇杆(前后=前进后退, 左右=平移), 右摇杆左右=转向
-# 退出:  A(0)=stand_mode 或 Back(6)=keep_mode, AMP 内两者立即生效(无 1s 节流)
+# 退出:  A(0)=stand_mode(仍受 1s 节流); Back(6)=keep_mode(AMP 内立即生效)
 # 安全:  松开 LB 后 /cmd_vel_limiter 停发, 小脑 250ms 超时自动归零(等效死区);
 #        反馈断流/倾角超限/推理异常时小脑自动切 keep, 物理急停始终独立可用
 # ⚠ RT(右扳机)在 AMP 模式下不会切换状态(walk_leg 不接受 walk_amp 前置),
