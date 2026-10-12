@@ -5,6 +5,7 @@
  * @LastEditTime: 2024-10-21 20:18:46
  */
 
+#include <algorithm>
 #include <string>
 
 // projects
@@ -26,6 +27,9 @@ void PowerFlowR::SetDataFiled(uint8_t* send, uint8_t* recv) {
 
 int PowerFlowR::MitFloatToUint(float x, float x_min, float x_max, int bits) {
   /// Converts a float to an unsigned int, given range and number of bits ///
+  // Saturate before quantization: dropping high bits during packing would wrap
+  // an out-of-range gain or even reverse the sign of an effort command.
+  x = std::clamp(x, x_min, x_max);
   float span = x_max - x_min;
   float offset = x_min;
   return (int)((x - offset) * ((float)((1 << bits) - 1)) / span);
@@ -101,10 +105,10 @@ void PowerFlowR::SetMitCmd(float pos, float vel, float toq, float kp, float kd) 
   send_buf_[0] = pos_tmp >> 8;
   send_buf_[1] = pos_tmp;
   send_buf_[2] = vel_tmp >> 4;
-  send_buf_[3] = (vel_tmp & 0xF) << 4 | kp_tmp >> 8;
+  send_buf_[3] = (vel_tmp & 0xF) << 4 | ((kp_tmp >> 8) & 0xF);
   send_buf_[4] = kp_tmp;
   send_buf_[5] = (kd_tmp >> 4);
-  send_buf_[6] = (kd_tmp & 0xF) << 4 | tor_tmp >> 8;
+  send_buf_[6] = (kd_tmp & 0xF) << 4 | ((tor_tmp >> 8) & 0xF);
   send_buf_[7] = tor_tmp;
 }
 
