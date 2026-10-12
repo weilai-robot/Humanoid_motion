@@ -3,6 +3,7 @@
 #include "sim_module/sim_module.h"
 #include <yaml-cpp/yaml.h>
 #include <cmath>
+#include <chrono>
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 
 namespace xyber_x1_infer::sim_module {
@@ -147,6 +148,14 @@ void SimModule::Shutdown() {
 void SimModule::CmdCallback(const std::shared_ptr<const my_ros2_proto::msg::JointCommand>& msg) {
   if (!sim_ready_.load(std::memory_order_acquire) || !sim_ || !m_ || !d_) {
     return;
+  }
+  // 诊断: 命令回调计数 + sim时间 + 墙钟 (与 MainLoop 的 loop_count 对照可证/伪命令丢帧)
+  static uint64_t s_cmd_count = 0;
+  if (++s_cmd_count % 1000 == 1) {
+    const auto wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    AIMRT_INFO("[simdiag] cmd#{} simtime={:.3f} wall={:.3f}", s_cmd_count, d_->time,
+               static_cast<double>(wall_ns) * 1e-9);
   }
 
   sensor_msgs::msg::Imu imu_data_msg;
