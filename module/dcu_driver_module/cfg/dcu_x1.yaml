@@ -293,7 +293,9 @@ transmission:                               # 传动层配置
     actuator_left: lumbar_left_actuator
     actuator_right: lumbar_right_actuator
     direction_left: 1.0
-    direction_right: 1.0
+    # 真机 +0.10 rad 测试确认原正方向后折；模型 pitch 正方向为前折。
+    # 同时转换命令和反馈的 position/velocity/effort，kp/kd 保持正值。
+    direction_right: -1.0
     param_path: null
 
   - name: lumbar_yaw_trans
