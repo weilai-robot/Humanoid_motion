@@ -282,7 +282,8 @@ controllers:
                 right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint, 
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint, 
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
-    init_state: [0.0,   0.0,   0.0,
+    # 与真机同一腰方向测试：B(zero) 的 pitch=+0.05 rad，模型应向前折。
+    init_state: [0.0,   0.0,   0.05,
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,  
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   
@@ -303,21 +304,25 @@ controllers:
     joint_list: [left_shoulder_pitch_joint, left_shoulder_roll_joint, left_elbow_pitch_joint, 
                 right_shoulder_pitch_joint, right_shoulder_roll_joint, right_elbow_pitch_joint, 
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint,
-                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint]
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint,
+                lumbar_pitch_joint]
     # 浅蹲静态稳定位形(同 rl_x1.yaml, 见其注释): kp300 下任意时长驻留,
     # 进 AMP 由策略动态接管(settle=0); 勿改回 default_q 深蹲(静态必倾覆)
     init_state: [0.0,   0.0,   0.0,
                  0.0,   0.0,   0.0,
                  0.4,   0.05,  -0.31, 0.49,  -0.21,
-                 -0.4, -0.05,  0.31,  0.49,  -0.21]
+                 -0.4, -0.05,  0.31,  0.49,  -0.21,
+                 0.0]  # A(stand) 覆盖腰测试角并返回中立
     stiffness:  [300.0, 300.0, 300.0,
                  300.0, 300.0, 300.0,
                  250.0, 250.0, 250.0, 250.0, 200.0,
-                 250.0, 250.0, 250.0, 250.0, 200.0]
+                 250.0, 250.0, 250.0, 250.0, 200.0,
+                 700.0]  # 保持仿真原先继承的腰增益
     damping:    [1.5,   1.5,   1.5,
                  1.5,   1.5,   1.5,
                  5.0,   5.0,   5.0,   5.0,   5.0,
-                 5.0,   5.0,   5.0,   5.0,   5.0]
+                 5.0,   5.0,   5.0,   5.0,   5.0,
+                 5.0]
 
   # plan
   pd_plan:
