@@ -43,7 +43,8 @@ release_neck() {
 }
 trap release_neck EXIT INT TERM HUP
 
-sudo setcap cap_net_raw=ep ./aimrt_main
+# EtherCAT 原始套接字与控制线程实时调度权限；失败时不启动真机控制。
+sudo setcap cap_net_raw,cap_sys_nice=ep ./aimrt_main || exit $?
 ./aimrt_main --cfg_file_path=./cfg/x1_cfg.yaml
 aimrt_rc=$?
 

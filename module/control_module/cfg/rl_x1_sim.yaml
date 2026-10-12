@@ -447,7 +447,7 @@ controllers:
     amp_conf:
       settle_ticks: 0        # 策略 tick0 即接管(零静持): harness 实测 default_q 静持>1.5s 必倾覆,
                         # 且增益无关(kpx10+无限力矩仍倒); 从浅蹲 stand 位形动态接管已验证
-      constant_cmd: [1.0, 0.0, 0.0]  # 仿真固定 vx=1m/s；使用 /cmd_vel_limiter 时删除此行（真机未配置）
+      constant_cmd: [1.0, 0.0, 0.0]  # 与真机一致：AMP 固定 vx=1m/s；使用外部速度时删除此行
       cmd_x_range: [-0.5, 2.5]
       cmd_y_range: [-0.5, 0.5]
       cmd_yaw_range: [-1.5, 1.5]

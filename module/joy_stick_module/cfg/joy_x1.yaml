@@ -75,11 +75,10 @@ twist_pubs:
     #   angular-z: 0.0
 
 #######################    AMP 手柄操作：   #######################
-# 进入:  zero(B) → stand(A) 站稳 → Guide(8) 进 AMP → 保持零速 ≥1s 观察(策略立即接管，无软启动)
-# 控制:  按住 LB(4) + 左摇杆(前后=前进后退, 左右=平移), 右摇杆左右=转向
+# 默认进入: 等启动≥1s → zero(B)复位完成 → stand(A)站稳≥3s → 单次 Guide(8)
+# 默认 AMP: rl_x1.yaml constant_cmd=[1,0,0]，立即持续 1m/s；无需 LB/摇杆，无软启动
 # 退出:  A(0)=stand_mode(仍受 1s 节流); Back(6)=keep_mode(AMP 内立即生效)
-# 安全:  松开 LB 后 /cmd_vel_limiter 停发, 小脑 250ms 超时自动归零(等效死区);
+# 固定 AMP 中松开 LB/摇杆归零/发送零速都不会停止，须切出 AMP；异常用硬件急停
 #        反馈断流/倾角超限/推理异常时小脑自动切 keep, 物理急停始终独立可用
-# ⚠ RT(右扳机)在 AMP 模式下不会切换状态(walk_leg 不接受 walk_amp 前置),
-#   但其 IMU 闭环速度(0.4m/s 前进)仍会绕过 LB 发布 —— AMP 中勿按 RT;
-#   误按后可用 LT(左扳机)触发 5s 匀减速刹停(结束自动回 stand)
+# 删除 AMP constant_cmd 后才使用外部速度模式: LB+左摇杆 vx/vy，右摇杆 wz，250ms 超时归零
+# 测试期间勿按 RT/LT；RT 的闭环速度在固定 AMP 中被忽略，LT 的速度斜坡也不能用于刹停
