@@ -21,11 +21,14 @@
 #include <cstdio>
 #include <cstring>
 
-// 提供了 sizeof() 运算符和标准库函数的安全替代方案,用于处理原始字符数组中的
-// 以空字符结尾的(C风格)字符串。
-// 这些函数使用编译时数组大小来限制读写操作在数组边界内。当数组大小无法在编译时
-// 确定时(例如当数组退化为指针时),它们会触发编译错误。
-// 它们不执行运行时边界检查。
+// Provides safe alternatives to the sizeof() operator and standard library functions for handling
+// null-terminated (C-style) strings in raw char arrays.
+//
+// These functions make use of compile-time array sizes to limit read and write operations to within
+// the array bounds. They are designed to trigger a compile error if the array size cannot be
+// determined at compile time (e.g. when an array has decayed into a pointer).
+//
+// They do not perform runtime bound checks.
 
 namespace mujoco {
 namespace sample_util {

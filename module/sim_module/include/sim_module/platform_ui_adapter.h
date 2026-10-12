@@ -84,7 +84,7 @@ class PlatformUIAdapter {
   void OnWindowRefresh();
   void OnWindowResize(int width, int height);
 
-  mjuiState state_;  // 鼠标 按键状态
+  mjuiState state_;
   int last_key_;
   void (*event_callback_)(mjuiState*);
   void (*layout_callback_)(mjuiState*);

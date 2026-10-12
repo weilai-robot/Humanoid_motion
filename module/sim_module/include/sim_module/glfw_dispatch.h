@@ -17,18 +17,16 @@
 
 #include <GLFW/glfw3.h>
 
+#ifdef __APPLE__
+#define GLFW_EXPOSE_NATIVE_NSGL
+#include <GLFW/glfw3native.h>
+#endif
+
 namespace mujoco {
 // Dynamic dispatch table for GLFW functions required by Simulate.
 // This allows us to use GLFW without introducing a link-time dependency on the
 // library, which is useful e.g. when using GLFW via Python.
-// 作用是实现一个动态调度表，用于管理和调用 GLFW 库中的函数，而不需要在编译时链接到 GLFW 库。
-// 这种方法允许程序在运行时动态加载 GLFW 库，从而避免了编译时的依赖。
-// 这在某些情况下非常有用，例如在通过 Python 使用 GLFW 时。
 struct Glfw {
-// 这个宏定义用于声明GLFW函数指针:
-// - decltype(&::func) 获取GLFW原始函数的类型
-// - func 是函数指针变量名
-// 例如: decltype(&::glfwInit) glfwInit 声明了一个类型为glfwInit函数指针的变量
 #define mjGLFW_DECLARE_SYMBOL(func) decltype(&::func) func
   // go/keep-sorted start
   mjGLFW_DECLARE_SYMBOL(glfwCreateWindow);
@@ -65,6 +63,11 @@ struct Glfw {
   mjGLFW_DECLARE_SYMBOL(glfwWindowHint);
   mjGLFW_DECLARE_SYMBOL(glfwWindowShouldClose);
   // go/keep-sorted end
+
+#ifdef __APPLE__
+  mjGLFW_DECLARE_SYMBOL(glfwGetNSGLContext);
+#endif
+
 #undef mjGLFW_DECLARE_SYMBOL
 };
 
