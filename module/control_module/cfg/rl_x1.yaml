@@ -280,9 +280,9 @@ controllers:
                 right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint, 
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint, 
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
-    # 腰方向测试：仅 B(zero) 的 pitch 给 +0.05 rad（模型应前折约 2.9°）。
+    # 腰方向测试：仅 B(zero) 的 pitch 给 +0.10 rad（模型应前折约 5.7°）。
     # 这是姿态目标，不是标零偏移；stand 显式回到 0，AMP 仍使用训练默认角。
-    init_state: [0.0,   0.0,   0.05,
+    init_state: [0.0,   0.0,   0.10,
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
                  0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
