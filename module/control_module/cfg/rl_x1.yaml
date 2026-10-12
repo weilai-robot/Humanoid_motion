@@ -142,8 +142,9 @@ joint_limits:
     lower: -0.25
     upper: 0.25
   lumbar_pitch_joint:
-    lower: -0.45
-    upper: 0.15
+    # 与训练 f1.urdf 一致：模型正角度前折；真机方向由 DCU 传动层转换。
+    lower: -0.15
+    upper: 0.45
   left_shoulder_pitch_joint:
     lower: -2.5
     upper: 1.5
