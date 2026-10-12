@@ -438,8 +438,9 @@ controllers:
                  4.0,   3.3,   3.3,   5.0,   2.5,  2.5]
     obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
     amp_conf:
-      settle_ticks: 0        # 无静持: 策略 tick0 即动作 — 完全复刻 sim2sim 起步条件;
-                             # sim 复现分析: stand/settle 静持期身体前倾4.6°→9°+踝kp50下沉, 接管即发散
+      settle_ticks: 25       # 0.5s=验收验证值。根因定案: default_q 静态保持>1.5s必倾覆
+                             # (harness实测 0.5/1.0/1.5s存活, 2.0s倒), 驻留超窗=接管必倒;
+                             # 规程: stand 2s ramp 完成后 0.5s 内进 AMP, 总驻留<1.5s
       constant_cmd: [1.0, 0.0, 0.0]  # 与真机一致(验收复刻模式); 恢复外部控制删此行
       cmd_x_range: [-0.5, 2.5]
       cmd_y_range: [-0.5, 0.5]
