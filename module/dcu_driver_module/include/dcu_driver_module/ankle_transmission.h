@@ -44,7 +44,7 @@ class RightAnkleParallelTransmission : public AnkleParallelTransmission {
  public:
   RightAnkleParallelTransmission(std::string name, std::string param_path, ActuatorHandle actr_left,
                                  ActuatorHandle actr_right, JointHandle joint_pitch,
-                                 JointHandle joint_roll, double direction_pitch = 1.0);
+                                 JointHandle joint_roll);
 
   virtual void TransformActuatorToJoint() override;
   virtual void TransformJointToActuator() override;
@@ -52,9 +52,6 @@ class RightAnkleParallelTransmission : public AnkleParallelTransmission {
  private:
   double p_4p2_6_y = 0.025;
   double p_4p4_6_y = -0.025;
-
-  // pitch 关节坐标系方向 (+1/-1): 用于将真机关节坐标对齐到训练模型约定
-  double direction_pitch_ = 1.0;
 
   JointHandle joint_roll_;
   JointHandle joint_pitch_;

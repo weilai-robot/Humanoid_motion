@@ -164,14 +164,14 @@ joint_limits:
     lower: -2.5
     upper: 1.5
   right_shoulder_roll_joint:
-    lower: 0
-    upper: 2
+    lower: -2
+    upper: 0
   right_shoulder_yaw_joint:
     lower: -1.8
     upper: 1.8
   right_elbow_pitch_joint:
-    lower: -2
-    upper: 0
+    lower: 0
+    upper: 2
   right_elbow_yaw_joint:
     lower: -1.8
     upper: 1.8
@@ -299,9 +299,9 @@ controllers:
                 left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint,
                 right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint]
     init_state: [0.15,  -0.1,  0.3,
-                 -0.15,  0.1,  -0.3,
+                 0.15,  -0.1,  0.3,
                  0.4,   0.05,  -0.31, 0.49,  -0.21,
-                 -0.4, -0.05,  0.31,  0.49,  0.21]
+                 -0.4, -0.05,  0.31,  0.49,  -0.21]
     stiffness:  [300.0, 300.0, 300.0,
                  300.0, 300.0, 300.0,
                  250.0, 250.0, 250.0, 250.0, 200.0,
@@ -337,8 +337,8 @@ controllers:
     init_state: [0.4,   0.05, -0.31, 0.49, -0.21, 0.0,
                  0.0,   0.0,   0.03,
                  0.03, -0.06,  0.18,  0.34, 0.0, 0.0, 0.0,
-                 0.03,  0.06,  0.18, -0.34, 0.0, 0.0, 0.0,
-                 -0.4, -0.05,  0.31,  0.49, 0.21, 0.0]
+                 -0.03, -0.06, -0.18,  0.34, 0.0, 0.0, 0.0,
+                 -0.4, -0.05,  0.31,  0.49, -0.21, 0.0]
     stiffness:  [30.0, 40.0, 35.0, 100.0, 35.0, 35.0,
                  60.0, 60.0, 80.0,
                  40.0, 40.0, 40.0, 30.0, 30.0, 8.0, 8.0,
@@ -362,7 +362,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/amp_21.onnx
+      policy_file: cfg/control_module/policy/amp_24t.onnx
       actions_size: 29
       observations_size: 98    # 5(cmd) + 3*29(q/dq/action) + 6(imu)
       num_hist: 66
@@ -402,7 +402,7 @@ controllers:
       dof_vel: 0.05
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/amp_21.onnx
+      policy_file: cfg/control_module/policy/amp_23.onnx
       actions_size: 14
       observations_size: 53
       num_hist: 66

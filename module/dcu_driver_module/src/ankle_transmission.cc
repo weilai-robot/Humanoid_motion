@@ -430,9 +430,8 @@ void LeftAnkleParallelTransmission::TransformJointToActuator() {
 
 RightAnkleParallelTransmission::RightAnkleParallelTransmission(
     std::string name, std::string param_path, ActuatorHandle actr_left, ActuatorHandle actr_right,
-    JointHandle joint_pitch, JointHandle joint_roll, double direction_pitch)
+    JointHandle joint_pitch, JointHandle joint_roll)
     : AnkleParallelTransmission(name, param_path),
-      direction_pitch_(direction_pitch),
       actr_left_(actr_left),
       actr_right_(actr_right),
       joint_roll_(joint_roll),
@@ -590,9 +589,9 @@ void RightAnkleParallelTransmission::TransformActuatorToJoint() {
   double qd5 = qd56[0];
   double qd6 = qd56[1];
 
-  joint_pitch_.handle->state.position = q5 * direction_pitch_;
-  joint_pitch_.handle->state.velocity = qd5 * direction_pitch_;
-  joint_pitch_.handle->state.effort = tauj5 * direction_pitch_;
+  joint_pitch_.handle->state.position = q5;
+  joint_pitch_.handle->state.velocity = qd5;
+  joint_pitch_.handle->state.effort = tauj5;
 
   joint_roll_.handle->state.position = q6;
   joint_roll_.handle->state.velocity = qd6;
@@ -601,7 +600,7 @@ void RightAnkleParallelTransmission::TransformActuatorToJoint() {
 
 void RightAnkleParallelTransmission::TransformJointToActuator() {
   // pos
-  double q5Des = joint_pitch_.handle->cmd.position * direction_pitch_;
+  double q5Des = joint_pitch_.handle->cmd.position;
   double q6Des = joint_roll_.handle->cmd.position;
 
   p_4p2_6_y = 0.025;
@@ -638,13 +637,13 @@ void RightAnkleParallelTransmission::TransformJointToActuator() {
   qm6Des = acos(c2 / sqrt(pow(a2, 2) + pow(b2, 2))) + atan(a2 / b2) - 1.2030;
 
   // torque
-  double q5 = joint_pitch_.handle->state.position * direction_pitch_;  // 机构模型用真机坐标
+  double q5 = joint_pitch_.handle->state.position;
   double q6 = joint_roll_.handle->state.position;
 
   double qm5 = actr_left_.handle->state.position * actr_left_.direction;
   double qm6 = actr_right_.handle->state.position * actr_right_.direction;
 
-  double tau5Des = joint_pitch_.handle->cmd.effort * direction_pitch_;
+  double tau5Des = joint_pitch_.handle->cmd.effort;
   double tau6Des = joint_roll_.handle->cmd.effort;
 
   double cq5 = cos(q5);
@@ -728,7 +727,7 @@ void RightAnkleParallelTransmission::TransformJointToActuator() {
   double taum6Des = (f2a * tau5Des - f1a * tau6Des) / (f2a * f1b - f1a * f2b);
 
   // vel
-  double qd5Des = joint_pitch_.handle->cmd.velocity * direction_pitch_;
+  double qd5Des = joint_pitch_.handle->cmd.velocity;
   double qd6Des = joint_roll_.handle->cmd.velocity;
 
   double det11 = f2b / (f2b * f1a - f1b * f2a);
