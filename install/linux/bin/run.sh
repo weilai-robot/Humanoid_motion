@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# 可为独立静态测试选择配置；默认仍为手柄 AMP 部署配置。
+AIMRT_CFG_FILE="${AIMRT_CFG_FILE:-./cfg/x1_cfg.yaml}"
+if [ ! -f "${AIMRT_CFG_FILE}" ]; then
+    echo "[run.sh][ERROR] 缺少配置 ${AIMRT_CFG_FILE}"
+    exit 1
+fi
+
 # 自动探测并 source ROS2 环境
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${SCRIPT_DIR}/ros2_source.sh" ]; then
@@ -45,7 +52,7 @@ trap release_neck EXIT INT TERM HUP
 
 # EtherCAT 原始套接字与控制线程实时调度权限；失败时不启动真机控制。
 sudo setcap cap_net_raw,cap_sys_nice=ep ./aimrt_main || exit $?
-./aimrt_main --cfg_file_path=./cfg/x1_cfg.yaml
+./aimrt_main --cfg_file_path="${AIMRT_CFG_FILE}"
 aimrt_rc=$?
 
 # aimrt_main 退出后, 由 EXIT trap 自动执行 release_neck 下使能
