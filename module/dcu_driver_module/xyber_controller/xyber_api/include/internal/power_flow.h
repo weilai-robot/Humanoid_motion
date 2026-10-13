@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <cstring>
+
 // projects
 #include "internal/actuator_base.h"
 
@@ -108,31 +110,32 @@ class PowerFlowL : public xyber::Actuator {
   ~PowerFlowL() {}
 
  public:
-  virtual void SetEffort(float cur) override { cmd_data_->cur = cur; }
-  virtual float GetEffort() override { return state_data_->cur; }
-  virtual void SetPosition(float pos) override { cmd_data_->pos = pos; }
-  virtual float GetPosition() override { return state_data_->pos; }
-  virtual void SetMitCmd(float pos, float, float, float, float) override { cmd_data_->pos = pos; }
+  virtual void SetEffort(float cur) override { WriteFloat(send_buf_ + sizeof(float), cur); }
+  virtual float GetEffort() override { return ReadFloat(recv_buf_ + sizeof(float)); }
+  virtual void SetPosition(float pos) override { WriteFloat(send_buf_, pos); }
+  virtual float GetPosition() override { return ReadFloat(recv_buf_); }
+  virtual void SetMitCmd(float pos, float, float, float, float) override { SetPosition(pos); }
 
  private:
   virtual void SetDataFiled(uint8_t* send, uint8_t* recv) override {
     send_buf_ = send + ACTUATOR_FRAME_SIZE * (id_ - 1);
     recv_buf_ = recv + ACTUATOR_FRAME_SIZE * (id_ - 1);
 
-    cmd_data_ = (L28Data*)send_buf_;
-    state_data_ = (L28Data*)recv_buf_;
-
-    cmd_data_->cur = PF_L28_MAX_CUR;  // Give a default cur
+    SetEffort(PF_L28_MAX_CUR);  // Give a default cur.
   }
 
  private:
-  struct L28Data {
-    float pos = 0;
-    float cur = 0;
-  };
-
-  L28Data* cmd_data_ = nullptr;
-  L28Data* state_data_ = nullptr;
+  // DCU channels have a 65-byte TX stride and one control byte. Float payloads
+  // are not necessarily aligned; preserve the existing native-endian wire bytes
+  // without dereferencing a float-containing struct at an unaligned address.
+  static void WriteFloat(uint8_t* bytes, float value) {
+    std::memcpy(bytes, &value, sizeof(value));
+  }
+  static float ReadFloat(const uint8_t* bytes) {
+    float value;
+    std::memcpy(&value, bytes, sizeof(value));
+    return value;
+  }
 };
 
 }  // namespace xyber_power_flow

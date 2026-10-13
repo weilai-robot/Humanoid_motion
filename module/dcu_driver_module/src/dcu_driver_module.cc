@@ -105,6 +105,8 @@ bool DcuDriverModule::InitDcu(YAML::Node& cfg_node) {
         ret = xyber_ctrl_->AttachActuator(dcu_cfg.name, (CtrlChannel)ch, StringToType(actr.type),
                                           actr.name, actr.can_id);
         AIMRT_CHECK_ERROR_THROW(ret, "Actuator {} register failed.", actr.name);
+        AIMRT_INFO("Actuator route: {} -> DCU {} (ECAT {}) / channel_{} / CAN {} / {}",
+                   actr.name, dcu_cfg.name, dcu_cfg.ecat_id, ch + 1, actr.can_id, actr.type);
       }
     }
   }
@@ -120,7 +122,9 @@ bool DcuDriverModule::InitDcu(YAML::Node& cfg_node) {
   // enable actuator and imu
   if (enable_actuator_) {
     for (const auto name : actuator_name_list_) {
-      if (!xyber_ctrl_->EnableActuator(name)) {
+      const bool enabled = xyber_ctrl_->EnableActuator(name);
+      AIMRT_INFO("EnableActuator({}) returned {}", name, enabled);
+      if (!enabled) {
         ret = false;
       }
     }
@@ -402,49 +406,45 @@ void DcuDriverModule::PublishLoop() {
     stamp.sec = now.tv_sec;
     stamp.nanosec = now.tv_usec * 1000;
 
-    // refresh actuator state data
-    for (auto& [name, data] : actuator_data_space_) {
-      data.state.effort = xyber_ctrl_->GetEffort(name);
-      data.state.velocity = xyber_ctrl_->GetVelocity(name);
-      data.state.position = xyber_ctrl_->GetPosition(name);
+    // Read SDK feedback into thread-local messages before locking shared data.
+    for (size_t i = 0; i < actuator_name_list_.size(); ++i) {
+      const auto& name = actuator_name_list_[i];
+      actr_state.effort[i] = xyber_ctrl_->GetEffort(name);
+      actr_state.velocity[i] = xyber_ctrl_->GetVelocity(name);
+      actr_state.position[i] = xyber_ctrl_->GetPosition(name);
     }
-    // transmission
+    // Snapshot feedback and command caches under the same lock as JointCmdCallback.
     {
       std::lock_guard<std::mutex> lock(rw_mtx_);
+      for (size_t i = 0; i < actuator_name_list_.size(); ++i) {
+        auto& state = actuator_data_space_.at(actuator_name_list_[i]).state;
+        state.effort = actr_state.effort[i];
+        state.velocity = actr_state.velocity[i];
+        state.position = actr_state.position[i];
+      }
       transmission_.TransformActuatorToJoint();
-    }
-    // publish joint state
-    // uint32_t i = 0;
-    // for (const auto& [name, data] : joint_data_space_) { // TODO: RL module needs fixed js
-    //   js_msg.effort[i] = data.state.effort;
-    //   js_msg.velocity[i] = data.state.velocity;
-    //   js_msg.position[i] = data.state.position;
-    //   i++;
-    // }
-    for (size_t i = 0; i < joint_name_list_.size(); i++) {
-      const auto& it = joint_data_space_.find(js_msg.name[i]);
-      js_msg.effort[i] = it->second.state.effort;
-      js_msg.velocity[i] = it->second.state.velocity;
-      js_msg.position[i] = it->second.state.position;
+      for (size_t i = 0; i < joint_name_list_.size(); i++) {
+        const auto& state = joint_data_space_.at(js_msg.name[i]).state;
+        js_msg.effort[i] = state.effort;
+        js_msg.velocity[i] = state.velocity;
+        js_msg.position[i] = state.position;
+      }
+      if (actuator_debug_) {
+        for (size_t i = 0; i < actuator_name_list_.size(); i++) {
+          const auto& cmd = actuator_data_space_.at(actuator_name_list_[i]).cmd;
+          actr_cmd.effort[i] = cmd.effort;
+          actr_cmd.velocity[i] = cmd.velocity;
+          actr_cmd.position[i] = cmd.position;
+          actr_cmd.stiffness[i] = cmd.kp;
+          actr_cmd.damping[i] = cmd.kd;
+        }
+      }
     }
     js_msg.header.stamp = stamp;
     pub_joint_state.Publish(js_msg);
-
-    // pub actuator data for debug
     if (actuator_debug_) {
-      for (size_t i = 0; i < actuator_name_list_.size(); i++) {
-        auto it = actuator_data_space_.find(actuator_name_list_[i]);
-
-        actr_state.effort[i] = it->second.state.effort;
-        actr_state.velocity[i] = it->second.state.velocity;
-        actr_state.position[i] = it->second.state.position;
-
-        actr_cmd.effort[i] = it->second.cmd.effort;
-        actr_cmd.velocity[i] = it->second.cmd.velocity;
-        actr_cmd.position[i] = it->second.cmd.position;
-        actr_cmd.stiffness[i] = it->second.cmd.kp;
-        actr_cmd.damping[i] = it->second.cmd.kd;
-      }
+      actr_state.header.stamp = stamp;
+      actr_cmd.header.stamp = stamp;
       pub_actuator_cmd.Publish(actr_cmd);
       pub_actuator_state.Publish(actr_state);
     }
@@ -494,6 +494,8 @@ void DcuDriverModule::JointCmdCallback(
   // AIMRT_DEBUG("Received joint cmd data: {}", my_ros2_proto::msg::to_yaml(*msg));
   if (!is_running_) return;
 
+  // Keep command writes, transmission, and SDK dispatch consistent with snapshots.
+  std::lock_guard<std::mutex> lock(rw_mtx_);
   // cache cmd data
   for (size_t i = 0; i < msg->name.size(); i++) {
     auto it = joint_data_space_.find(msg->name[i]);
@@ -510,10 +512,7 @@ void DcuDriverModule::JointCmdCallback(
     it->second.cmd.kd = msg->damping[i];
   }
   // transmission
-  {
-    std::lock_guard<std::mutex> lock(rw_mtx_);
-    transmission_.TransformJointToActuator();
-  }
+  transmission_.TransformJointToActuator();
   // send to actuator
   for (const auto& [name, data] : actuator_data_space_) {
     // AIMRT_DEBUG("Send actuator {} pos {} vel {} tor {} kp {} kd {}.", name, data.cmd.position,
