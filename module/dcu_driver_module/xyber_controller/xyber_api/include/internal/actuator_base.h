@@ -51,6 +51,7 @@ class Actuator {
   virtual float GetPosition() { return 0.0f; }
 
   virtual void SetMitParam(MitParam param) {}
+  virtual bool GetMitParam(MitParam& param) { return false; }
   virtual void SetMitCmd(float pos, float vel, float toq, float kp, float kd) {}
 
  protected:

@@ -14,6 +14,7 @@
 
 // projects
 #include "common_type.h"
+#include "actuator_diagnostics.h"
 
 namespace xyber {
 
@@ -94,6 +95,8 @@ class XyberController {
    * @return {*}
    */
   void ApplyDcuImuOffset(const std::string& name);
+  bool GetActuatorState(const std::string& name, ActuatorStateSnapshot& state);
+  bool GetActuatorDiagnostics(const std::string& name, ActuatorDiagnostics& data);
 
  public:  // PowerFlowR Actuator API
   /**

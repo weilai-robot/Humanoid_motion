@@ -69,6 +69,7 @@ class PowerFlowR : public xyber::Actuator {
   virtual float GetPosition() override;
 
   virtual void SetMitParam(xyber::MitParam param) override { mit_param_ = param; };
+  virtual bool GetMitParam(xyber::MitParam& param) override { param = mit_param_; return true; }
   virtual void SetMitCmd(float pos, float vel, float toq, float kp, float kd) override;
 
  private:

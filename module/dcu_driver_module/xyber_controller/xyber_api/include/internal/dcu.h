@@ -13,6 +13,7 @@
 
 // projects
 #include "common_type.h"
+#include "actuator_diagnostics.h"
 #include "internal/actuator_base.h"
 #include "internal/ethercat_node.h"
 
@@ -46,7 +47,7 @@ class Dcu : public ethercat_manager::EthercatNode {
   explicit Dcu(std::string name, int32_t ecat_id);
   virtual ~Dcu();
 
-  void RegisterActuator(Actuator* actr);
+  bool RegisterActuator(Actuator* actr);
   Actuator* GetActautor(const std::string& name);
   virtual std::string GetName() override { return name_; }
   void SetChannelId(CtrlChannel ch, uint8_t id);
@@ -78,6 +79,10 @@ class Dcu : public ethercat_manager::EthercatNode {
 
   void SetMitParam(const std::string& name, MitParam param);
   void SetMitCmd(const std::string& name, float pos, float vel, float effort, float kp, float kd);
+  bool GetActuatorState(const std::string& name, ActuatorStateSnapshot& state);
+  bool GetActuatorDiagnostics(const std::string& name, ActuatorDiagnostics& data);
+  void PushRecvData(const uint8_t* buf, uint16_t len) override;
+  void PullSendData(uint8_t* buf, uint16_t len) override;
 
  private:
   virtual bool Init() override;
@@ -92,6 +97,17 @@ class Dcu : public ethercat_manager::EthercatNode {
 
   DcuSendPacket send_buf_;
   DcuRecvPacket recv_buf_;
+  DcuSendPacket last_sent_{};
+  struct SlotTracker {
+    bool seen = false;
+    uint64_t content_seq = 0, measurement_seq = 0;
+    int64_t content_ns = 0, measurement_ns = 0;
+  } rx_tracker_[3][8];  // protected by recv_mtx_
+  uint64_t rx_pdo_seq_ = 0, tx_pdo_seq_ = 0;
+  int64_t rx_pdo_ns_ = 0, tx_pdo_ns_ = 0;
+  uint64_t command_seq_[3][8]{}, last_command_seq_[3][8]{};
+  uint8_t command_format_[3][8]{}, last_command_format_[3][8]{};
+  void MarkCommand(Actuator* actr, uint8_t format = 0);  // caller owns send_mtx_
 };
 
 }  // namespace xyber

@@ -38,6 +38,7 @@ class DcuDriverModule : public aimrt::ModuleBase {
   bool InitTransmission(YAML::Node& cfg_node);
 
   void PublishLoop();
+  void DiagnosticsLoop();
   auto GetLogger() { return core_.GetLogger(); }
 
   void JointCmdCallback(const std::shared_ptr<const my_ros2_proto::msg::JointCommand>& msg);
@@ -50,6 +51,12 @@ class DcuDriverModule : public aimrt::ModuleBase {
   std::string imu_dcu_name_;
   std::mutex rw_mtx_;
   std::thread publish_thread_;
+  std::thread diagnostics_thread_;
+  bool diagnostics_enabled_ = false;
+  double diagnostics_frequency_ = 50.0;
+  double diagnostics_duration_s_ = 120.0;
+  std::string diagnostics_dir_ = "test_logs/dcu_diag";
+  std::atomic<int64_t> last_joint_cmd_ns_{0};
   std::vector<std::string> joint_name_list_;
   std::vector<std::string> actuator_name_list_;
   std::unordered_map<std::string, DataSpace> joint_data_space_;

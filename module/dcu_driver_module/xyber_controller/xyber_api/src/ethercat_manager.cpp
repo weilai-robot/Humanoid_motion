@@ -351,9 +351,12 @@ void EthercatManager::WorkLoop() {
   while (is_running_) {
     // update slave state data here
     current_wkc_ = ec_receive_processdata(EC_TIMEOUTRET);
-    for (const auto& [id, node] : nodes_map_) {
-      node->PushRecvData(ec_slave[id].inputs, ec_slave[id].Ibytes);
-      node->OnDataSyncHook();
+    // A failed/partial receive must not refresh SDK feedback with old PDO bytes.
+    if (current_wkc_ >= expected_wkc_) {
+      for (const auto& [id, node] : nodes_map_) {
+        node->PushRecvData(ec_slave[id].inputs, ec_slave[id].Ibytes);
+        node->OnDataSyncHook();
+      }
     }
 
     // update slave cmd data here

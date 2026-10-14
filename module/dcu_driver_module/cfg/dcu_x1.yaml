@@ -3,6 +3,14 @@ imu_dcu_name: hip             # IMU数据来源，下肢DCU
 enable_actuator: true         # 使能所有执行器
 actuator_debug: true         # 发布所有执行器的调试数据
 
+# Priority troubleshooting only; launcher enables a separate bounded IO worker.
+# PDO age and payload-change age are distinct; neither proves per-CAN freshness.
+diagnostics_conf:
+  enabled: false
+  frequency_hz: 50
+  duration_s: 120
+  output_dir: test_logs/dcu_diag
+
 joint_list:                   # 关节列表
   - left_hip_pitch_joint
   - left_hip_roll_joint

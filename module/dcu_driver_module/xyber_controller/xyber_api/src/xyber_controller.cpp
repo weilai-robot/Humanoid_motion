@@ -67,8 +67,8 @@ bool XyberController::CreateDcu(std::string name, uint8_t id) {
 bool XyberController::AttachActuator(std::string dcu_name, CtrlChannel ch, ActuatorType type,
                                      std::string actuator_name, uint8_t id) {
   // check check
-  if (id == 0) {
-    LOG_ERROR("Actuator %s invalid id 0, attach failed.", actuator_name.c_str());
+  if (id == 0 || id > 8 || static_cast<unsigned>(ch) > 2) {
+    LOG_ERROR("Actuator %s invalid channel/id, attach failed.", actuator_name.c_str());
     return false;
   }
   if (dcu_map_.find(dcu_name) == dcu_map_.end()) {
@@ -105,7 +105,10 @@ bool XyberController::AttachActuator(std::string dcu_name, CtrlChannel ch, Actua
   // attach to dcu
   LOG_DEBUG("Attach actuator %s %d to DCU %s Channel %d.", actuator_name.c_str(), (int)id,
             dcu_name.c_str(), (int)ch + 1);
-  dcu_map_[dcu_name]->RegisterActuator(atcr);
+  if (!dcu_map_[dcu_name]->RegisterActuator(atcr)) {
+    delete atcr;
+    return false;
+  }
   actuator_dcu_map_[actuator_name] = dcu_map_[dcu_name];
   return true;
 }
@@ -159,6 +162,16 @@ DcuImu XyberController::GetDcuImuData(const std::string& name) {
 void XyberController::ApplyDcuImuOffset(const std::string& name) {
   auto it = dcu_map_.find(name);
   if (it == dcu_map_.end()) return;
+}
+
+bool XyberController::GetActuatorState(const std::string& name, ActuatorStateSnapshot& state) {
+  const auto it = actuator_dcu_map_.find(name);
+  return it != actuator_dcu_map_.end() && it->second->GetActuatorState(name, state);
+}
+
+bool XyberController::GetActuatorDiagnostics(const std::string& name, ActuatorDiagnostics& data) {
+  const auto it = actuator_dcu_map_.find(name);
+  return it != actuator_dcu_map_.end() && it->second->GetActuatorDiagnostics(name, data);
 }
 
 bool XyberController::EnableAllActuator() {

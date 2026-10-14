@@ -8,6 +8,8 @@
 #include "internal/dcu.h"
 
 #include <cstring>
+#include <algorithm>
+#include <chrono>
 #include <typeinfo>
 
 // projects
@@ -50,17 +52,122 @@ bool Dcu::Init() {
   return true;
 }
 
-void Dcu::RegisterActuator(Actuator* actr) {
+bool Dcu::RegisterActuator(Actuator* actr) {
+  if (!actr || actr->GetId() == 0 || actr->GetId() > MAX_CHANNEL_DEVICES ||
+      static_cast<unsigned>(actr->GetCtrlChannel()) > 2 ||
+      actuator_map_.find(actr->GetName()) != actuator_map_.end()) return false;
   CtrlChannel ch = actr->GetCtrlChannel();
   if (ctrl_channel_map_[ch].size() >= MAX_CHANNEL_DEVICES) {
     LOG_ERROR("Channel %d has too many devices, %s register failed.", (int)ch,
               actr->GetName().c_str());
-    return;
+    return false;
+  }
+  for (auto* existing : ctrl_channel_map_[ch]) {
+    if (existing->GetId() == actr->GetId()) return false;
   }
 
   actr->SetDataFiled(send_buf_.canfd[(size_t)ch].data, recv_buf_.canfd[(size_t)ch]);
   actuator_map_[actr->GetName()] = actr;
   ctrl_channel_map_[ch].push_back(actr);
+  return true;
+}
+
+namespace {
+int64_t SteadyNs() {
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+float Decode(unsigned value, float lo, float hi, unsigned max_code) {
+  return lo + value * (hi-lo) / max_code;
+}
+}  // namespace
+
+void Dcu::PushRecvData(const uint8_t* buf, uint16_t len) {
+  if (!buf || len != sizeof(DcuRecvPacket)) return;
+  std::lock_guard<std::mutex> lock(recv_mtx_);
+  const int64_t now = SteadyNs();
+  for (const auto& [name, actr] : actuator_map_) {
+    const auto ch = static_cast<size_t>(actr->GetCtrlChannel());
+    const auto id = static_cast<size_t>(actr->GetId()-1);
+    auto& tracker = rx_tracker_[ch][id];
+    const auto* next = buf + ch*64 + id*8;
+    const auto* previous = recv_buf_.canfd[ch] + id*8;
+    if (!tracker.seen || std::memcmp(next, previous, 8) != 0) {
+      ++tracker.content_seq;
+      tracker.content_ns = now;
+    }
+    const size_t measurement_bytes =
+        actr->GetType() == ActuatorType::POWER_FLOW_R86 ||
+        actr->GetType() == ActuatorType::POWER_FLOW_R52 ? 5 : 8;
+    if (!tracker.seen || std::memcmp(next, previous, measurement_bytes) != 0) {
+      ++tracker.measurement_seq;
+      tracker.measurement_ns = now;
+    }
+    tracker.seen = true;
+  }
+  std::memcpy(&recv_buf_, buf, sizeof(recv_buf_));
+  ++rx_pdo_seq_;
+  rx_pdo_ns_ = now;
+}
+
+void Dcu::PullSendData(uint8_t* buf, uint16_t len) {
+  if (!buf || len != sizeof(DcuSendPacket)) return;
+  std::lock_guard<std::mutex> lock(send_mtx_);
+  std::memcpy(buf, &send_buf_, sizeof(send_buf_));
+  last_sent_ = send_buf_;
+  std::memcpy(last_command_seq_, command_seq_, sizeof(command_seq_));
+  std::memcpy(last_command_format_, command_format_, sizeof(command_format_));
+  ++tx_pdo_seq_;
+  tx_pdo_ns_ = SteadyNs();
+}
+
+void Dcu::MarkCommand(Actuator* actr, uint8_t format) {
+  const auto ch = static_cast<size_t>(actr->GetCtrlChannel());
+  const auto id = static_cast<size_t>(actr->GetId()-1);
+  ++command_seq_[ch][id];
+  command_format_[ch][id] = format;
+}
+
+bool Dcu::GetActuatorState(const std::string& name, ActuatorStateSnapshot& state) {
+  auto* actr = GetActautor(name);
+  if (!actr) return false;
+  std::lock_guard<std::mutex> lock(recv_mtx_);
+  state = {actr->GetPosition(), actr->GetVelocity(), actr->GetEffort(), rx_pdo_ns_};
+  return true;
+}
+
+bool Dcu::GetActuatorDiagnostics(const std::string& name, ActuatorDiagnostics& data) {
+  auto* actr = GetActautor(name);
+  if (!actr) return false;
+  std::scoped_lock lock(send_mtx_, recv_mtx_);
+  data = ActuatorDiagnostics{};
+  const auto ch = static_cast<size_t>(actr->GetCtrlChannel());
+  const auto id = static_cast<size_t>(actr->GetId()-1);
+  const auto& tracker = rx_tracker_[ch][id];
+  data.ecat_id = id_; data.channel = ch+1; data.can_id = id+1; data.type = actr->GetType();
+  data.rx_pdo_seq = rx_pdo_seq_; data.rx_pdo_ns = rx_pdo_ns_;
+  data.rx_content_seq = tracker.content_seq; data.rx_content_ns = tracker.content_ns;
+  data.rx_measurement_seq = tracker.measurement_seq; data.rx_measurement_ns = tracker.measurement_ns;
+  data.rx_seen = tracker.seen;
+  data.tx_pdo_seq = tx_pdo_seq_; data.tx_pdo_ns = tx_pdo_ns_;
+  data.tx_command_seq = last_command_seq_[ch][id];
+  data.tx_format = last_command_format_[ch][id]; data.tx_mask = last_sent_.canfd[ch].ctrl;
+  std::copy_n(recv_buf_.canfd[ch]+id*8, 8, data.rx.begin());
+  std::copy_n(last_sent_.canfd[ch].data+id*8, 8, data.tx.begin());
+  data.state = {actr->GetPosition(), actr->GetVelocity(), actr->GetEffort(), rx_pdo_ns_};
+  data.mit_param_valid = actr->GetMitParam(data.mit_param);
+  if (data.tx_pdo_seq && data.tx_format == 1 && data.mit_param_valid) {
+    const auto& p = data.mit_param; const auto& f = data.tx;
+    data.cmd_position = Decode((f[0]<<8)|f[1], p.pos_min,p.pos_max,65535);
+    data.cmd_velocity = Decode((f[2]<<4)|(f[3]>>4),p.vel_min,p.vel_max,4095);
+    data.cmd_kp = Decode(((f[3]&15)<<8)|f[4],p.kp_min,p.kp_max,4095);
+    data.cmd_kd = Decode((f[5]<<4)|(f[6]>>4),p.kd_min,p.kd_max,4095);
+    data.cmd_effort = Decode(((f[6]&15)<<8)|f[7],p.toq_min,p.toq_max,4095);
+  } else if (data.tx_pdo_seq && data.tx_format == 2) {
+    std::memcpy(&data.cmd_position,data.tx.data(),sizeof(float));
+    std::memcpy(&data.cmd_current_limit,data.tx.data()+4,sizeof(float));
+  }
+  return true;
 }
 
 Actuator* Dcu::GetActautor(const std::string& name) {
@@ -120,6 +227,7 @@ bool Dcu::EnableActuator(const std::string& name) {
   {
     std::lock_guard<std::mutex> lock(send_mtx_);
     actr->RequestState(STATE_ENABLE);
+    MarkCommand(actr);
     SetChannelId(actr->GetCtrlChannel(), actr->GetId());
   }
   ActautorState ret = STATE_DISABLE;
@@ -152,6 +260,7 @@ bool Dcu::DisableActuator(const std::string& name) {
   {
     std::lock_guard<std::mutex> lock(send_mtx_);
     actr->RequestState(STATE_DISABLE);
+    MarkCommand(actr);
     SetChannelId(actr->GetCtrlChannel(), actr->GetId());
   }
   ActautorState ret = STATE_DISABLE;
@@ -172,6 +281,7 @@ void Dcu::ClearError(const std::string& name) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->ClearError();
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -181,6 +291,7 @@ void Dcu::SetHomingPosition(const std::string& name) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SetHomingPosition();
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -190,6 +301,7 @@ void Dcu::SaveConfig(const std::string& name) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SaveConfig();
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -224,6 +336,7 @@ bool Dcu::SetMode(const std::string& name, ActautorMode mode) {
   {
     std::lock_guard<std::mutex> lock(send_mtx_);
     actr->SetMode(mode);
+    MarkCommand(actr);
     SetChannelId(actr->GetCtrlChannel(), actr->GetId());
   }
 
@@ -250,6 +363,7 @@ void Dcu::SetEffort(const std::string& name, float cur) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SetEffort(cur);
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -267,6 +381,7 @@ void Dcu::SetVelocity(const std::string& name, float vel) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SetVelocity(vel);
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -284,6 +399,7 @@ void Dcu::SetPosition(const std::string& name, float pos) {
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SetPosition(pos);
+  MarkCommand(actr);
   SetChannelId(actr->GetCtrlChannel(), actr->GetId());
 }
 
@@ -299,7 +415,7 @@ void Dcu::SetMitParam(const std::string& name, MitParam param) {
   auto actr = GetActautor(name);
   if (!actr) return;
 
-  std::lock_guard<std::mutex> lock(send_mtx_);
+  std::scoped_lock lock(send_mtx_, recv_mtx_);
   actr->SetMitParam(param);
 }
 
@@ -310,6 +426,9 @@ void Dcu::SetMitCmd(const std::string& name, float pos, float vel, float effort,
 
   std::lock_guard<std::mutex> lock(send_mtx_);
   actr->SetMitCmd(pos, vel, effort, kp, kd);
+  const auto type = actr->GetType();
+  MarkCommand(actr, type == ActuatorType::POWER_FLOW_L28 ? 2 :
+                   type == ActuatorType::POWER_FLOW_R86 || type == ActuatorType::POWER_FLOW_R52 ? 1 : 0);
   SetChannelId(actr->GetCtrlChannel(), CHANNEL_BROADCAST_ID);
 }
 

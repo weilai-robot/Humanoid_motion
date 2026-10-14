@@ -4,6 +4,17 @@
 #include "dcu_driver_module/dcu_driver_module.h"
 
 #include <ctime>
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <limits>
+#include <sstream>
+#ifdef __linux__
+#include <pthread.h>
+#include <sched.h>
+#endif
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "my_ros2_proto/msg/joy_stick_data.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -28,12 +39,22 @@ bool DcuDriverModule::Initialize(aimrt::CoreRef core) {
     publish_frequecy_ = cfg_node["publish_frequecy"].as<double>();
     joint_name_list_ = cfg_node["joint_list"].as<std::vector<std::string>>();
     actuator_name_list_ = cfg_node["actuator_list"].as<std::vector<std::string>>();
+    if (const auto diag = cfg_node["diagnostics_conf"]) {
+      diagnostics_enabled_ = diag["enabled"] && diag["enabled"].as<bool>();
+      if (diag["frequency_hz"]) diagnostics_frequency_ = diag["frequency_hz"].as<double>();
+      if (diag["duration_s"]) diagnostics_duration_s_ = diag["duration_s"].as<double>();
+      if (diag["output_dir"]) diagnostics_dir_ = diag["output_dir"].as<std::string>();
+      AIMRT_CHECK_ERROR_THROW(std::isfinite(diagnostics_frequency_) && diagnostics_frequency_ > 0 &&
+                                 diagnostics_frequency_ <= 100 && std::isfinite(diagnostics_duration_s_) &&
+                                 diagnostics_duration_s_ > 0 && diagnostics_duration_s_ <= 600,
+                             "Invalid DCU diagnostics frequency/duration");
+    }
 
     // Init DCU SDK
-    InitDcu(cfg_node);
+    AIMRT_CHECK_ERROR_THROW(InitDcu(cfg_node), "DCU initialization failed");
 
     // Init Transmission
-    InitTransmission(cfg_node);
+    AIMRT_CHECK_ERROR_THROW(InitTransmission(cfg_node), "Transmission initialization failed");
 
     // Prepare publisher
     pub_imu_ = core_.GetChannelHandle().GetPublisher("/imu/data");
@@ -66,6 +87,10 @@ bool DcuDriverModule::Start() {
   is_running_ = true;
   AIMRT_INFO("DcuDriverModule::Start enter, publish_frequecy={}", publish_frequecy_);
   publish_thread_ = std::thread(&DcuDriverModule::PublishLoop, this);
+  if (diagnostics_enabled_) {
+    try { diagnostics_thread_ = std::thread(&DcuDriverModule::DiagnosticsLoop, this); }
+    catch (const std::exception& e) { AIMRT_WARN("DCU diagnostic worker unavailable: {}", e.what()); }
+  }
   AIMRT_INFO("DcuDriverModule::Start publish thread launched");
 
   return true;
@@ -76,6 +101,7 @@ void DcuDriverModule::Shutdown() {
   if (publish_thread_.joinable()) {
     publish_thread_.join();
   }
+  if (diagnostics_thread_.joinable()) diagnostics_thread_.join();
 
   xyber_ctrl_->DisableAllActuator();
   xyber_ctrl_->Stop();
@@ -397,6 +423,7 @@ void DcuDriverModule::PublishLoop() {
   auto period = std::chrono::nanoseconds((uint64_t)(1 / publish_frequecy_ * 1000000000));
   auto next_loop_time = std::chrono::steady_clock::now();
   uint64_t loop_count = 0;
+  int64_t last_joint_pdo_ns = 0;
   while (is_running_) {
     // get time
     timeval now;
@@ -407,11 +434,20 @@ void DcuDriverModule::PublishLoop() {
     stamp.nanosec = now.tv_usec * 1000;
 
     // Read SDK feedback into thread-local messages before locking shared data.
+    int64_t joint_pdo_ns = std::numeric_limits<int64_t>::max();
+    bool all_pdo_seen = !actuator_name_list_.empty();
     for (size_t i = 0; i < actuator_name_list_.size(); ++i) {
       const auto& name = actuator_name_list_[i];
-      actr_state.effort[i] = xyber_ctrl_->GetEffort(name);
-      actr_state.velocity[i] = xyber_ctrl_->GetVelocity(name);
-      actr_state.position[i] = xyber_ctrl_->GetPosition(name);
+      ActuatorStateSnapshot state;
+      if (xyber_ctrl_->GetActuatorState(name, state)) {
+        actr_state.effort[i] = state.effort;
+        actr_state.velocity[i] = state.velocity;
+        actr_state.position[i] = state.position;
+        all_pdo_seen = all_pdo_seen && state.pdo_received_ns > 0;
+        joint_pdo_ns = std::min(joint_pdo_ns, state.pdo_received_ns);
+      } else {
+        all_pdo_seen = false;
+      }
     }
     // Snapshot feedback and command caches under the same lock as JointCmdCallback.
     {
@@ -441,7 +477,12 @@ void DcuDriverModule::PublishLoop() {
       }
     }
     js_msg.header.stamp = stamp;
-    pub_joint_state.Publish(js_msg);
+    // Do not make a stopped PDO cache look fresh by stamping it every 1 ms.
+    // Constant joint positions are fine when new valid PDOs actually arrive.
+    if (all_pdo_seen && joint_pdo_ns > last_joint_pdo_ns) {
+      pub_joint_state.Publish(js_msg);
+      last_joint_pdo_ns = joint_pdo_ns;
+    }
     if (actuator_debug_) {
       actr_state.header.stamp = stamp;
       actr_cmd.header.stamp = stamp;
@@ -493,6 +534,20 @@ void DcuDriverModule::JointCmdCallback(
     const std::shared_ptr<const my_ros2_proto::msg::JointCommand>& msg) {
   // AIMRT_DEBUG("Received joint cmd data: {}", my_ros2_proto::msg::to_yaml(*msg));
   if (!is_running_) return;
+  const size_t n = msg->name.size();
+  if (msg->position.size() < n || msg->velocity.size() < n || msg->effort.size() < n ||
+      msg->stiffness.size() < n || msg->damping.size() < n) {
+    AIMRT_WARN("Reject incomplete joint command");
+    return;
+  }
+  for (size_t i = 0; i < n; ++i) {
+    if (!std::isfinite(msg->position[i]) || !std::isfinite(msg->velocity[i]) ||
+        !std::isfinite(msg->effort[i]) || !std::isfinite(msg->stiffness[i]) ||
+        !std::isfinite(msg->damping[i])) {
+      AIMRT_WARN("Reject non-finite joint command");
+      return;
+    }
+  }
 
   // Keep command writes, transmission, and SDK dispatch consistent with snapshots.
   std::lock_guard<std::mutex> lock(rw_mtx_);
@@ -519,6 +574,133 @@ void DcuDriverModule::JointCmdCallback(
     //             data.cmd.velocity, data.cmd.effort, data.cmd.kp, data.cmd.kd);
     xyber_ctrl_->SetMitCmd(name, data.cmd.position, data.cmd.velocity, data.cmd.effort, data.cmd.kp,
                            data.cmd.kd);
+  }
+  last_joint_cmd_ns_.store(std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count(), std::memory_order_release);
+}
+
+void DcuDriverModule::DiagnosticsLoop() {
+  // File formatting/IO stays on this bounded, non-RT worker. It never changes
+  // commands or resets a motor. Do not hold rw_mtx_ while acquiring SDK locks.
+  try {
+#ifdef __linux__
+    pthread_setname_np(pthread_self(), "dcu_diag");
+    sched_param scheduling{};
+    const int sched_result = pthread_setschedparam(pthread_self(), SCHED_OTHER, &scheduling);
+    if (sched_result != 0) {
+      AIMRT_WARN("DCU diagnostics cannot select non-RT scheduling: {}", sched_result);
+      return;
+    }
+#endif
+    std::filesystem::create_directories(diagnostics_dir_);
+    const auto wall = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::tm tm{};
+    localtime_r(&wall, &tm);
+    std::ostringstream filename;
+    filename << diagnostics_dir_ << "/dcu_diag_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << '_'
+             << std::chrono::steady_clock::now().time_since_epoch().count() << ".csv";
+    std::ofstream file(filename.str());
+    if (!file) { AIMRT_WARN("Cannot open DCU diagnostics {}", filename.str()); return; }
+    file.exceptions(std::ofstream::badbit | std::ofstream::failbit);
+    file << "timestamp_ns,steady_ns,frame,actuator,dcu,ecat_id,channel,can_id,type,"
+            "rx_seen,rx_pdo_seq,rx_age_ms,rx_content_seq,rx_content_age_ms,"
+            "rx_measurement_seq,rx_measurement_age_ms,tx_pdo_seq,tx_age_ms,tx_command_seq,"
+            "tx_format,tx_mask,tx_slot_enabled,position,velocity,effort,"
+            "status_byte,heartbeat,power_state,error_nibble,"
+            "cmd_position,cmd_velocity,cmd_effort,cmd_kp,cmd_kd,cmd_current_limit,"
+            "host_kp_max,host_kd_max,host_effort_max,"
+            "cache_cmd_position,cache_cmd_velocity,cache_cmd_effort,cache_cmd_kp,cache_cmd_kd,"
+            "joint_cmd_age_ms,host_pd_effort,rx_hex,tx_hex\n";
+    file << std::setprecision(10);
+    const auto hex = [](const std::array<uint8_t,8>& bytes) {
+      std::ostringstream out;
+      for (auto b : bytes) out << std::hex << std::setfill('0') << std::setw(2) << unsigned(b);
+      return out.str();
+    };
+    const auto text = [](const std::string& value) {
+      std::string out = "\"";
+      for (char c : value) { if (c == '"') out += '"'; out += c; }
+      return out + '"';
+    };
+    const auto age = [](int64_t now, int64_t stamp) {
+      return stamp > 0 && now >= stamp ? (now-stamp)/1e6 : -1.0;
+    };
+    std::vector<DataSpace> cache(actuator_name_list_.size());
+    std::unordered_map<int,int64_t> last_repetition_warning;
+    const auto start = std::chrono::steady_clock::now();
+    auto next = start;
+    const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(1.0/diagnostics_frequency_));
+    uint64_t frame = 0;
+    AIMRT_INFO("DCU diagnostics: {} at {} Hz, {} s", filename.str(),
+               diagnostics_frequency_, diagnostics_duration_s_);
+    while (is_running_ && std::chrono::duration<double>(
+               std::chrono::steady_clock::now()-start).count() < diagnostics_duration_s_) {
+      int64_t cmd_stamp;
+      {
+        std::lock_guard<std::mutex> lock(rw_mtx_);
+        for (size_t i=0;i<cache.size();++i) cache[i] = actuator_data_space_.at(actuator_name_list_[i]);
+        cmd_stamp = last_joint_cmd_ns_.load(std::memory_order_acquire);
+      }
+      std::unordered_map<int,int> repetition_counts;
+      for (size_t i=0;i<cache.size();++i) {
+        const auto& name = actuator_name_list_[i];
+        ActuatorDiagnostics s;
+        if (!xyber_ctrl_->GetActuatorDiagnostics(name,s)) continue;
+        const auto now = std::chrono::steady_clock::now();
+        const int64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+        const int64_t wall_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::string dcu;
+        for (const auto& route : dcu_network_cfg_) if (route.ecat_id == s.ecat_id) dcu = route.name;
+        const bool r = s.type == ActuatorType::POWER_FLOW_R86 || s.type == ActuatorType::POWER_FLOW_R52;
+        const int status = r && s.rx_seen ? s.rx[5] : -1;
+        if (r && status >= 0 && ((status>>1)&7) == STATE_ENABLE &&
+            age(ns,s.rx_pdo_ns) >= 0 && age(ns,s.rx_pdo_ns) < 100 &&
+            age(ns,s.rx_measurement_ns) >= 200 && std::abs(s.state.velocity) >= .1) {
+          ++repetition_counts[s.ecat_id*4+s.channel];
+        }
+        const double pd = s.tx_format == 1 && s.tx_pdo_seq && s.rx_seen
+            ? s.cmd_effort + s.cmd_kp*(s.cmd_position-s.state.position) +
+              s.cmd_kd*(s.cmd_velocity-s.state.velocity) : std::numeric_limits<double>::quiet_NaN();
+        const auto& c = cache[i].cmd;
+        file << wall_ns << ',' << ns << ',' << frame << ',' << text(name) << ',' << text(dcu) << ','
+             << s.ecat_id << ',' << s.channel << ',' << s.can_id << ',' << int(s.type) << ','
+             << s.rx_seen << ',' << s.rx_pdo_seq << ',' << age(ns,s.rx_pdo_ns) << ','
+             << s.rx_content_seq << ',' << age(ns,s.rx_content_ns) << ','
+             << s.rx_measurement_seq << ',' << age(ns,s.rx_measurement_ns) << ','
+             << s.tx_pdo_seq << ',' << age(ns,s.tx_pdo_ns) << ',' << s.tx_command_seq << ','
+             << unsigned(s.tx_format) << ',' << unsigned(s.tx_mask) << ','
+             << ((s.tx_mask & (1u << (s.can_id-1))) != 0) << ','
+             << s.state.position << ',' << s.state.velocity << ',' << s.state.effort << ','
+             << status << ',' << (status < 0 ? -1 : status&1) << ','
+             << (status < 0 ? -1 : (status>>1)&7) << ',' << (status < 0 ? -1 : status>>4) << ','
+             << s.cmd_position << ',' << s.cmd_velocity << ',' << s.cmd_effort << ','
+             << s.cmd_kp << ',' << s.cmd_kd << ',' << s.cmd_current_limit << ','
+             << s.mit_param.kp_max << ',' << s.mit_param.kd_max << ',' << s.mit_param.toq_max << ','
+             << c.position << ',' << c.velocity << ',' << c.effort << ',' << c.kp << ',' << c.kd << ','
+             << age(ns,cmd_stamp) << ',' << pd << ',' << hex(s.rx) << ',' << hex(s.tx) << '\n';
+      }
+      const int64_t warning_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      for (const auto& [group,count] : repetition_counts) {
+        if (warning_ns-last_repetition_warning[group] >= 2'000'000'000LL) {
+          AIMRT_WARN("DCU suspicious repeated moving feedback: ECAT {} channel_{} motors={}; "
+                     "PDO still arriving, measurement bytes unchanged >=200ms with nonzero velocity. "
+                     "Check dcu_diag; stop AMP testing if this persists.", group/4,group%4,count);
+          last_repetition_warning[group] = warning_ns;
+        }
+      }
+      if (++frame % 50 == 0) file.flush();
+      next += period;
+      // After IO/scheduling stalls, resume sampling instead of flooding catch-up rows.
+      if (next < std::chrono::steady_clock::now()) next = std::chrono::steady_clock::now()+period;
+      std::this_thread::sleep_until(next);
+    }
+    file.flush();
+    AIMRT_INFO("DCU diagnostics completed: {}, {} frames", filename.str(), frame);
+  } catch (const std::exception& e) {
+    AIMRT_WARN("DCU diagnostics stopped: {}", e.what());
   }
 }
 
