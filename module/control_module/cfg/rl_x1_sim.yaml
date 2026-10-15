@@ -46,7 +46,7 @@ robot_states:
     pre_states: [stand_&_plan, walk_leg_&_plan, stand, walk_leg]
     controllers: [pd_zero, pd_stand, rl_walk_leg_shoulder]
 
-  # AMP全身行走模式（x1_29_AMP soup59c_50，50Hz，29DOF）
+  # AMP全身行走模式（x1_29_AMP v70b m16000b，50Hz，29DOF）
   walk_amp:
     trigger_topic: /amp_mode
     pre_states: [stand, stand_&_plan]  # 拒绝 Guide 长按导致 AMP 重入/清历史
@@ -421,7 +421,7 @@ controllers:
         - right_ankle_pitch_joint
         - right_ankle_roll_joint
 
-  # AMP 全身行走（x1_29_AMP soup59c_50，50Hz，29DOF）— 与 rl_x1.yaml 同契约
+  # AMP 全身行走（x1_29_AMP v70b m16000b，50Hz，29DOF）— 与 rl_x1.yaml 同契约
   # 策略关节序为 lab_dof_names；反馈和下发通过名称映射到顶层串行顺序
   rl_walk_amp:
     joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
@@ -439,15 +439,16 @@ controllers:
                  0.63204, -0.27224, 0.0, 0.0, -0.27224, 0.0,
                  0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                  0.0, 0.0, 0.0, 0.0, 0.0]
-    stiffness: [120.0, 120.0, 120.0, 100.0, 120.0, 100.0,
-                100.0, 150.0, 100.0, 150.0, 40.0, 40.0,
-                150.0, 50.0, 40.0, 40.0, 50.0, 50.0,
+    # v68 sim2real 辨识 PD（x1_armature_pd.md §4，与 rl_x1.yaml 同步）
+    stiffness: [65.0, 90.0, 65.0, 60.0, 70.0, 60.0,
+                100.0, 100.0, 100.0, 85.0, 40.0, 40.0,
+                85.0, 50.0, 40.0, 40.0, 50.0, 50.0,
                 40.0, 40.0, 50.0, 30.0, 30.0, 20.0,
                 20.0, 15.0, 15.0, 15.0, 15.0]
-    damping: [4.0, 4.0, 4.0, 3.3, 4.0, 3.3,
-              3.3, 5.0, 3.3, 5.0, 2.0, 2.0,
-              5.0, 2.5, 2.0, 2.0, 2.5, 2.5,
-              2.0, 2.0, 2.5, 1.5, 1.5, 1.0,
+    damping: [8.0, 8.0, 8.0, 8.0, 8.0, 8.0,
+              3.3, 8.0, 3.3, 8.0, 4.0, 4.0,
+              8.0, 4.0, 4.0, 4.0, 4.0, 2.5,
+              2.0, 2.0, 2.5, 1.9, 1.9, 1.0,
               1.0, 1.0, 1.0, 1.0, 1.0]
     obs_layout: amp          # AMP obs 布局: 无相位/无缩放/term-major 历史/零初始化
     amp_conf:
@@ -474,7 +475,7 @@ controllers:
       dof_vel: 1.
       quat: 1.
     onnx_conf:
-      policy_file: cfg/control_module/policy/x1_amp_soup59c_50hz.onnx
+      policy_file: cfg/control_module/policy/x1_amp_v70b_m16000_50hz.onnx
       actions_size: 29
       observations_size: 96   # 9 + 3*29
       num_hist: 3
