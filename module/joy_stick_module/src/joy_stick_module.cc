@@ -61,6 +61,7 @@ bool JoyStickModule::Initialize(aimrt::CoreRef core) {
           FloatPub publisher;
           publisher.topic_name = pub["topic_name"].as<std::string>();
           publisher.buttons = pub["buttons"].as<std::vector<uint8_t>>();
+          publisher.edge_triggered = pub["edge_triggered"] ? pub["edge_triggered"].as<bool>() : false;
           publisher.pub = core_.GetChannelHandle().GetPublisher(publisher.topic_name);
           aimrt::channel::RegisterPublishType<std_msgs::msg::Float32>(publisher.pub);
           float_pubs_.push_back(std::move(publisher));
@@ -153,7 +154,7 @@ void JoyStickModule::MainLoop() {
           if (button >= joy_data.buttons.size()) { ret = false; break; }
           ret &= joy_data.buttons[button];
         }
-        if (ret) {
+        if (float_pub.trigger.Update(ret, float_pub.edge_triggered)) {
           aimrt::channel::Publish<std_msgs::msg::Float32>(float_pub.pub, button_msgs);
         }
 

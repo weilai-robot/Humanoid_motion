@@ -7,6 +7,7 @@
 
 #include "aimrt_module_cpp_interface/module_base.h"
 #include "joy_stick_module/joy.h"
+#include "joy_stick_module/button_trigger.h"
 #include "joy_stick_module/joy_vel_limiter.h"
 
 #include "sensor_msgs/msg/imu.hpp"
@@ -17,6 +18,8 @@ struct FloatPub {
   std::string topic_name;
   std::vector<uint8_t> buttons;
   aimrt::channel::PublisherRef pub;
+  bool edge_triggered = false;
+  ButtonTrigger trigger;
 };
 
 struct TwistPub {

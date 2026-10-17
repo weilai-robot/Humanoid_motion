@@ -24,3 +24,16 @@
 | rl\_walk\_leg\_20260723\_step5000.onnx | 基于源码训练5000轮模型，用于陈总展示 |
 | rl\_walk\_leg.onnx                     | 源码部署仓库携带腿部12dof模型    |
 | rl\_walk\_leg\_shoulder.onnx           | 源码部署仓库携带腿肩协同模型       |
+
+## BeyondMimic X1 v11 舞蹈
+
+专用 `rl_x1_dance.yaml` 加载，不改变 AMP 默认模型。
+
+| 文件 | 来源与用途 |
+| --- | --- |
+| `dance_x1_v11_4999.bin` | `dance_x1_v11_model_4999.pt`，160→512→256→128→29，ELU，`X1DNCE2`；辨识 PD/armature；SHA256 `4b146822e4e37dfc1c73e35b5712d8893aacfcd82d5fb82e59d47f66b070d239` |
+| `dance_x1_motion.bin` | `dance_x1_train.npz`，647 帧、50 Hz，按 PhysX 关节名称重排；SHA256 `dd3376f615ee86daf6df4f1b13972942376d5a2275e904c4efb1674691bf884d` |
+| `dance_x1_v11_4999.json` | checkpoint / robot config / motion 来源 hash、逐关节参数及导出误差 |
+
+`tools/export_beyondmimic_x1.py` 从训练 `robots/x1.py` 读取参数；归一化使用 `_std + 0.01`。
+Mac 已执行离线验证；Ubuntu C++/ROS/DCU 与真机验收未执行。参见父仓库 `doc/BeyondMimic_X1_舞蹈部署.md`，当前按键是 A 零位 → B stand → Guide（准备位 → 连续就绪等待 → 自动播放）。准备位选训练 default_q，实际到位校验与模型资产一致，播放仍从参考帧 0 开始。历史手动等待探针不等同于当前自动接管；当前结果见 `doc/analysis/x1_dance_v11_20261017/guide_auto_start/`。

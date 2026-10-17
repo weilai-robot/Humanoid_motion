@@ -59,6 +59,13 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       use_sim_handles_ = cfg_node["use_sim_handles"].as<bool>();
       rt_priority_ = cfg_node["rt_priority"] ? cfg_node["rt_priority"].as<int32_t>() : -1;
       bind_cpu_ = cfg_node["bind_cpu"] ? cfg_node["bind_cpu"].as<int32_t>() : -1;
+      dance_deployment_ = static_cast<bool>(cfg_node["controllers"]["dance_x1"]);
+      if (dance_deployment_) {
+        dance_start_gate_.Configure(cfg_node["dance_ready_hold_s"].as<double>());
+        dance_stand_pose_error_ = cfg_node["dance_stand_pose_error"].as<double>();
+        AIMRT_CHECK_ERROR_THROW(std::isfinite(dance_stand_pose_error_) && dance_stand_pose_error_ > 0,
+                                "invalid dance_stand_pose_error");
+      }
 
       // 解析状态机
       last_trigger_time_ = high_resolution_clock::now();
@@ -67,6 +74,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       state_machine_.Init(cfg_node["robot_states"], initial_state);
       last_state_name_ = state_machine_.GetCurrentState();
       for (auto iter = cfg_node["robot_states"].begin(); iter != cfg_node["robot_states"].end(); iter++) {
+        // Prepared -> playback is internal, following the accepted Guide request.
+        if (iter->second["internal_trigger"] && iter->second["internal_trigger"].as<bool>()) continue;
         auto trigger_topic = iter->second["trigger_topic"].as<std::string>();
         if (trigger_topics_.find(trigger_topic) != trigger_topics_.end()) {
           continue;
@@ -76,6 +85,31 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         bool ret = aimrt::channel::Subscribe<std_msgs::msg::Float32>(subs_.back(),
           [this, trigger_topic](const std::shared_ptr<const std_msgs::msg::Float32>& msg) {
             std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
+            if (dance_deployment_ && trigger_topic == "/zero_mode") {
+              const auto zero = std::dynamic_pointer_cast<PDController>(controller_map_.at("pd_zero"));
+              if (!zero || !zero->FeedbackReady()) {
+                AIMRT_ERROR("Zero rejected: joint/IMU feedback is missing, stale or tilted");
+                return;
+              }
+            }
+            if (dance_deployment_ && trigger_topic == "/stand_mode") {
+              if (state_machine_.GetCurrentState() != "zero" || !DancePdReady("pd_zero")) {
+                AIMRT_WARN("Stand rejected: wait for 'Zero reached; press B for stand'");
+                return;
+              }
+            }
+            if (trigger_topic == "/dance_start") {
+              // One Guide press from stand authorizes preparation -> playback.
+              // Ignore repeats during preparation/playback; never restart them.
+              if (state_machine_.GetCurrentState() != "stand") return;
+              const auto pose_it = controller_map_.find("pd_dance_pose");
+              const auto pose = pose_it == controller_map_.end()
+                                    ? nullptr : std::dynamic_pointer_cast<PDController>(pose_it->second);
+              if (!DancePdReady("pd_stand") || !pose || !pose->FeedbackReady()) {
+                AIMRT_WARN("Guide rejected: wait for 'Stand reached; press Guide to prepare and dance'");
+                return;
+              }
+            }
             if (trigger_topic == "/amp_mode") {
               const auto it = controller_map_.find("rl_walk_amp");
               const auto amp = it == controller_map_.end()
@@ -86,21 +120,25 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
               }
             }
             const auto trigger_now = high_resolution_clock::now();
-            const bool amp_exit = state_machine_.GetCurrentState() == "walk_amp" &&
+            const bool policy_exit = (state_machine_.GetCurrentState() == "walk_amp" ||
+                                      state_machine_.GetCurrentState() == "dance_ready" ||
+                                      state_machine_.GetCurrentState() == "dance_x1" ||
+                                      (dance_deployment_ && (state_machine_.GetCurrentState() == "zero" ||
+                                                             state_machine_.GetCurrentState() == "stand"))) &&
                                   (trigger_topic == "/keep_mode" || trigger_topic == "/idle_mode");
-            if ((amp_exit || Throttler(trigger_now, last_trigger_time_, milliseconds(1000))) &&
+            // Dedicated dance buttons are edge triggered and state guarded.
+            // Do not discard the first A during the legacy startup throttle.
+            const bool dance_entry = dance_deployment_ &&
+                (trigger_topic == "/zero_mode" || trigger_topic == "/stand_mode" || trigger_topic == "/dance_start");
+            if ((policy_exit || dance_entry || Throttler(trigger_now, last_trigger_time_, milliseconds(1000))) &&
                 state_machine_.OnEvent(trigger_topic)) {
-              if (amp_exit) last_trigger_time_ = trigger_now;
-              auto now_state = state_machine_.GetCurrentState();
-              auto controller_names = state_machine_.GetCurrentControllerNames();
-              for (auto name : controller_names) {
-                // printf("RestartController: %s\n", name.c_str());
-                controller_map_[name]->RestartController();
+              if (policy_exit || dance_entry) last_trigger_time_ = trigger_now;
+              AIMRT_INFO("Trigger event: [{}] state '{}' -> '{}'", trigger_topic,
+                          last_state_name_, state_machine_.GetCurrentState());
+              RestartCurrentState();
+              if (dance_deployment_ && trigger_topic == "/dance_start") {
+                AIMRT_INFO("Guide accepted: moving to ready; playback will start automatically after continuous readiness hold");
               }
-              AIMRT_INFO("Trigger event: [{}] state '{}' -> '{}'", trigger_topic, last_state_name_, now_state);
-              
-              UpdateRlLoggingState(now_state);
-              last_state_name_ = now_state;
             }
           });
         AIMRT_CHECK_ERROR_THROW(ret, "Subscribe failed.");
@@ -115,7 +153,9 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         std::string controller_name = iter->first.as<std::string>();
         // printf("controller: %s\n", controller_name.c_str());
 
-        if (controller_name.substr(0, 3) == "rl_") {
+        if (controller_name == "dance_x1") {
+          controller_map_[controller_name] = std::make_shared<DanceController>(use_sim_handles_);
+        } else if (controller_name.substr(0, 3) == "rl_") {
           controller_map_[controller_name] = std::make_shared<RLController>(use_sim_handles_);
         } else if (controller_name.substr(0, 3) == "pd_") {
           controller_map_[controller_name] = std::make_shared<PDController>(use_sim_handles_);
@@ -129,6 +169,34 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         iter->second["control_frequency_hz"] = freq_;
         controller_map_[controller_name]->Init(iter->second);
 
+      }
+
+      // The preparation target comes from the actor's declared start profile.
+      // Refuse a stale hand-edited pose if the deployed asset/profile changes.
+      const auto dance_controller = controller_map_.find("dance_x1");
+      if (dance_controller != controller_map_.end()) {
+        const auto dance = std::dynamic_pointer_cast<DanceController>(dance_controller->second);
+        const auto all_joints = cfg_node["joint_list"].as<std::vector<std::string>>();
+        for (const std::string name : {"pd_zero", "pd_stand"}) {
+          AIMRT_CHECK_ERROR_THROW(cfg_node["controllers"][name] &&
+                                  cfg_node["controllers"][name]["joint_list"].as<std::vector<std::string>>() == all_joints,
+                                  "dance zero/stand controller must cover all joints in the configured order: {}", name);
+        }
+        AIMRT_CHECK_ERROR_THROW(cfg_node["robot_states"]["dance_x1"]["internal_trigger"].as<bool>() &&
+                                cfg_node["robot_states"]["dance_x1"]["trigger_topic"].as<std::string>() == "/dance_play" &&
+                                cfg_node["robot_states"]["dance_ready"]["trigger_topic"].as<std::string>() == "/dance_start",
+                                "dance Guide must select preparation; playback must be an internal trigger");
+        const auto pose_cfg = cfg_node["controllers"]["pd_dance_pose"];
+        AIMRT_CHECK_ERROR_THROW(pose_cfg, "dance deployment requires pd_dance_pose");
+        const auto names = pose_cfg["joint_list"].as<std::vector<std::string>>();
+        const auto positions = pose_cfg["init_state"].as<std::vector<double>>();
+        const auto expected = dance->PreparationPositions();
+        AIMRT_CHECK_ERROR_THROW(names == dance->GetJointList() && positions.size() == expected.size(),
+                                "dance preparation joint order mismatch");
+        for (size_t i = 0; i < expected.size(); ++i) {
+          AIMRT_CHECK_ERROR_THROW(std::isfinite(positions[i]) && std::abs(positions[i] - expected[i]) < 1e-5,
+                                  "dance preparation target differs from the configured start profile: {}", names[i]);
+        }
       }
 
       UpdateRlLoggingState(last_state_name_);
@@ -152,6 +220,7 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       subs_.push_back(core_.GetChannelHandle().GetSubscriber(cfg_node["sub_joy_vel_name"].as<std::string>()));
       bool ret = aimrt::channel::Subscribe<geometry_msgs::msg::Twist>(subs_.back(), 
         [this](const std::shared_ptr<const geometry_msgs::msg::Twist>& msg) {
+          std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
           auto controller_names = state_machine_.GetCurrentControllerNames();
           for (const auto& name : controller_names) {
             controller_map_[name]->SetCmdData(*msg);
@@ -199,6 +268,23 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
             controller.second->SetJointStateData(temp_msg, joint_state_index_map_);
           }
         });
+
+      const auto dance_it = controller_map_.find("dance_x1");
+      if (dance_it != controller_map_.end()) {
+        const auto dance = std::dynamic_pointer_cast<DanceController>(dance_it->second);
+        subs_.push_back(core_.GetChannelHandle().GetSubscriber(
+            cfg_node["sub_dance_anchor_name"].as<std::string>()));
+        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TransformStamped>(
+            subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TransformStamped>& msg) {
+              dance->SetAnchorPose(*msg);
+            });
+        subs_.push_back(core_.GetChannelHandle().GetSubscriber(
+            cfg_node["sub_dance_base_velocity_name"].as<std::string>()));
+        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TwistStamped>(
+            subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TwistStamped>& msg) {
+              dance->SetBaseVelocity(*msg);
+            });
+      }
 
       // 电机层指令/反馈（dcu_driver actuator_debug=true 时发布；用于 walk_diag 记录电机侧扭矩）
       const std::string actuator_cmd_topic =
@@ -302,6 +388,23 @@ void ControlModule::Shutdown() {
   }
 }
 
+void ControlModule::RestartCurrentState() {
+  dance_start_gate_.Reset();
+  dance_zero_ready_logged_ = false;
+  dance_stand_ready_logged_ = false;
+  for (const auto& name : state_machine_.GetCurrentControllerNames()) {
+    controller_map_.at(name)->RestartController();
+  }
+  last_state_name_ = state_machine_.GetCurrentState();
+  UpdateRlLoggingState(last_state_name_);
+}
+
+bool ControlModule::DancePdReady(const std::string& controller_name) const {
+  const auto it = controller_map_.find(controller_name);
+  const auto pose = it == controller_map_.end() ? nullptr : std::dynamic_pointer_cast<PDController>(it->second);
+  return pose && pose->TransitionComplete() && pose->TargetReached(dance_stand_pose_error_);
+}
+
 bool ControlModule::MainLoop() {
   try {
     AIMRT_INFO("Start MainLoop.");
@@ -332,14 +435,59 @@ bool ControlModule::MainLoop() {
 
       {
         std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
-        bool amp_fault = false;
+        bool policy_stopped = false;
+        if (dance_deployment_ && state_machine_.GetCurrentState() == "zero" &&
+            !dance_zero_ready_logged_ && DancePdReady("pd_zero")) {
+          dance_zero_ready_logged_ = true;
+          AIMRT_INFO("Zero reached; press B for stand");
+        }
+        if (dance_deployment_ && state_machine_.GetCurrentState() == "stand" &&
+            !dance_stand_ready_logged_ && DancePdReady("pd_stand")) {
+          dance_stand_ready_logged_ = true;
+          AIMRT_INFO("Stand reached; press Guide to prepare and dance");
+        }
+        if (dance_deployment_ && state_machine_.GetCurrentState() == "dance_ready") {
+          const auto pose = std::dynamic_pointer_cast<PDController>(controller_map_.at("pd_dance_pose"));
+          const auto dance = std::dynamic_pointer_cast<DanceController>(controller_map_.at("dance_x1"));
+          dance_start_gate_.Update(pose->TransitionComplete() && pose->FeedbackReady() && dance->Ready());
+          if (dance_start_gate_.Ready() && state_machine_.OnEvent("/dance_play")) {
+            // Switch before composing any command, then infer frame 0 below.
+            // A stop changes state and resets the gate, cancelling this sequence.
+            RestartCurrentState();
+            AIMRT_INFO("Ready hold complete; starting dance automatically from frame 0");
+          }
+        }
         auto controller_names = state_machine_.GetCurrentControllerNames();
         for (const auto& name : controller_names) {
           const auto& controller = controller_map_.at(name);
           controller->Update();
+          if (dance_deployment_ && (state_machine_.GetCurrentState() == "zero" ||
+                                    state_machine_.GetCurrentState() == "stand")) {
+            const auto pd = std::dynamic_pointer_cast<PDController>(controller);
+            if (!pd || !pd->FeedbackReady()) {
+              policy_stopped = true;
+              AIMRT_ERROR("Stand sequence stopped: stale feedback or excessive tilt");
+              break;
+            }
+          }
+          if (name == "pd_dance_pose") {
+            const auto pose = std::dynamic_pointer_cast<PDController>(controller);
+            if (!pose || !pose->FeedbackReady()) {
+              policy_stopped = true;
+              AIMRT_ERROR("Dance preparation stopped: stale feedback or excessive tilt");
+              break;
+            }
+          }
           const auto amp = std::dynamic_pointer_cast<RLController>(controller);
           if (amp && amp->IsAmpMode() && amp->AmpFaulted()) {
-            amp_fault = true;
+            policy_stopped = true;
+            break;
+          }
+          const auto dance = std::dynamic_pointer_cast<DanceController>(controller);
+          if (dance && (dance->Faulted() || dance->Finished())) {
+            policy_stopped = true;
+            if (dance->Faulted()) AIMRT_ERROR("Dance fault: {}", dance->FaultReason());
+            else AIMRT_INFO("Dance motion completed; switching to keep mode");
             break;
           }
           my_ros2_proto::msg::JointCommand tmp_cmd = controller->GetJointCmdData();
@@ -354,16 +502,27 @@ bool ControlModule::MainLoop() {
             cmd_msg.stiffness[index] = tmp_cmd.stiffness[ii];
           }
         }
-        if (amp_fault) {
+        if (policy_stopped) {
           // Stop applying a stale/nonfinite policy output. The keep controller
           // starts from the last measured pose; operator must diagnose/e-stop.
           if (state_machine_.OnEvent("/keep_mode")) {
+            RestartCurrentState();
+            AIMRT_WARN("Policy stopped: switched to keep mode");
+            // Publish the newly captured keep pose in this tick. Never send a
+            // partially composed command from the failed policy iteration.
             for (const auto& name : state_machine_.GetCurrentControllerNames()) {
-              controller_map_.at(name)->RestartController();
+              const auto command = controller_map_.at(name)->GetJointCmdData();
+              for (size_t i = 0; i < command.name.size(); ++i) {
+                const auto index = joint_cmd_index_map_.at(command.name[i]);
+                cmd_msg.name[index] = command.name[i];
+                cmd_msg.position[index] = command.position[i] + joint_offset_map_.at(command.name[i]);
+                cmd_msg.velocity[index] = command.velocity[i];
+                cmd_msg.effort[index] = command.effort[i];
+                cmd_msg.stiffness[index] = command.stiffness[i];
+                cmd_msg.damping[index] = command.damping[i];
+              }
             }
-            last_state_name_ = state_machine_.GetCurrentState();
-            UpdateRlLoggingState(last_state_name_);
-            AIMRT_ERROR("AMP fault: switched to keep mode (feedback, tilt or policy output)");
+            aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);
           }
         } else {
           aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);

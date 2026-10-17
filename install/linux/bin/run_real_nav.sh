@@ -33,9 +33,11 @@ elif [ -f ../share/ros2_plugin_proto/local_setup.bash ]; then
     source ../share/ros2_plugin_proto/local_setup.bash
 fi
 
+CONTROL_CONFIG="${X1_CONTROL_CONFIG:-./cfg/x1_cfg_real_nav.yaml}"
+
 # ── 配置检查 ─────────────────────────────────────────────────
-if [ ! -f ./cfg/x1_cfg_real_nav.yaml ]; then
-    echo "[run_real_nav][ERROR] 缺少配置 ./cfg/x1_cfg_real_nav.yaml"
+if [ ! -f "${CONTROL_CONFIG}" ]; then
+    echo "[run_real_nav][ERROR] 缺少配置 ${CONTROL_CONFIG}"
     echo "  请在构建机重新执行 ./scripts/build.sh 后再部署"
     exit 1
 fi
@@ -71,17 +73,17 @@ release_neck() {
 }
 trap release_neck EXIT INT TERM HUP
 
-# ── cap_net_raw（EtherCAT 原始套接字权限）─────────────────────
+# ── capabilities（EtherCAT 与实时调度权限）─────────────────────
 # 已具备则跳过; 缺失则尝试一次性设置（需要 sudo）
-if command -v getcap >/dev/null 2>&1 && getcap ./aimrt_main 2>/dev/null | grep -q "cap_net_raw"; then
-    echo "[run_real_nav] cap_net_raw 已就绪（跳过 setcap）"
+if command -v getcap >/dev/null 2>&1 && getcap ./aimrt_main 2>/dev/null | grep -Eq "cap_net_raw.*cap_sys_nice|cap_sys_nice.*cap_net_raw"; then
+    echo "[run_real_nav] cap_net_raw / cap_sys_nice 已就绪（跳过 setcap）"
 else
-    echo "[run_real_nav] 设置 cap_net_raw（需要 sudo 密码）..."
-    sudo setcap cap_net_raw=ep ./aimrt_main || \
+    echo "[run_real_nav] 设置 cap_net_raw / cap_sys_nice（需要 sudo 密码）..."
+    sudo setcap cap_net_raw,cap_sys_nice=ep ./aimrt_main || \
         echo "[run_real_nav][WARN] setcap 失败 —— EtherCAT 可能无法通信, 请检查权限"
 fi
 
-./aimrt_main --cfg_file_path=./cfg/x1_cfg_real_nav.yaml
+./aimrt_main --cfg_file_path="${CONTROL_CONFIG}"
 aimrt_rc=$?
 
 # aimrt_main 退出后, 由 EXIT trap 自动执行 release_neck 下使能

@@ -1,0 +1,18 @@
+# X1 dance: A zero, B stand, Guide preparation -> automatic playback.
+freq: 20
+float_pubs:
+  - topic_name: /zero_mode
+    buttons: [0]              # A: zero pose only, then hold
+    edge_triggered: true
+  - topic_name: /stand_mode
+    buttons: [1]              # B: stand after zero is reached
+    edge_triggered: true
+  - topic_name: /dance_start
+    buttons: [8]              # Guide: prepare default_q, hold ready 4 s, then play automatically
+    edge_triggered: true
+  - topic_name: /keep_mode
+    buttons: [6]              # Back: immediate keep
+  - topic_name: /idle_mode
+    buttons: [7]              # Start: idle
+# No velocity publishers, IMU subscription or RT/LT walking modes.
+twist_pubs: []

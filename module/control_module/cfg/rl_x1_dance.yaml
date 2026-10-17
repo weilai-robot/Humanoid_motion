@@ -1,0 +1,379 @@
+# X1 BeyondMimic v11: identified PD, 160 observations, 29 actions.
+# Dedicated dance configuration; regular AMP/joystick configurations are independent.
+control_frequecy: 1000
+use_sim_handles: false
+rt_priority: 80
+bind_cpu: 6
+initial_state: idle
+dance_ready_hold_s: 4.0  # Guide 启动准备；ready 条件连续满足 4 秒后自动播放
+dance_stand_pose_error: 0.12
+sub_joy_vel_name: /cmd_vel_limiter
+sub_imu_data_name: /imu/data
+sub_joint_state_name: /joint_states
+sub_dance_anchor_name: /dance/anchor_pose
+sub_dance_base_velocity_name: /dance/base_velocity
+sub_actuator_cmd_name: /actuator_cmd
+sub_actuator_state_name: /actuator_states
+pub_joint_cmd_name: /joint_cmd
+
+robot_states:
+  idle:
+    trigger_topic: /idle_mode
+    pre_states: [keep, zero, stand, dance_ready, dance_x1]
+    controllers: [pd_idle]
+  keep:
+    trigger_topic: /keep_mode
+    pre_states: [idle, zero, stand, dance_ready, dance_x1]
+    controllers: [pd_keep]
+  zero:
+    trigger_topic: /zero_mode
+    pre_states: [idle, keep, stand, dance_ready, dance_x1]
+    controllers: [pd_zero]
+  stand:
+    trigger_topic: /stand_mode
+    pre_states: [zero]
+    controllers: [pd_stand]
+  dance_ready:
+    trigger_topic: /dance_start
+    pre_states: [stand]
+    controllers: [pd_dance_pose]
+  dance_x1:
+    trigger_topic: /dance_play
+    internal_trigger: true
+    pre_states: [dance_ready]
+    controllers: [dance_x1]
+
+joint_list:
+  - lumbar_yaw_joint
+  - lumbar_roll_joint
+  - lumbar_pitch_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_pitch_joint
+  - left_elbow_yaw_joint
+  - left_wrist_pitch_joint
+  - left_wrist_roll_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_pitch_joint
+  - right_elbow_yaw_joint
+  - right_wrist_pitch_joint
+  - right_wrist_roll_joint
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_pitch_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_pitch_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+# ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+
+# ↓↓↓↓↓↓↓↓↓↓↓ 针对执行器标零后的真机装配偏移量，对与URDF不一致的关节进行补偿 ↓↓↓↓↓↓↓↓↓↓↓↓↓
+joint_offset:
+  lumbar_yaw_joint: 0.0
+  lumbar_roll_joint : 0.0
+  lumbar_pitch_joint: 0.0
+  left_shoulder_pitch_joint: 0.0
+  left_shoulder_roll_joint: 0.0
+  left_shoulder_yaw_joint: 0.0
+  left_elbow_pitch_joint: 0.0
+  left_elbow_yaw_joint: 0.0
+  left_wrist_pitch_joint: 0.0
+  left_wrist_roll_joint: 0.0
+  right_shoulder_pitch_joint: 0.0
+  right_shoulder_roll_joint: 0.0
+  right_shoulder_yaw_joint: 0.0
+  right_elbow_pitch_joint: 0.0
+  right_elbow_yaw_joint: 0.0
+  right_wrist_pitch_joint: 0.0
+  right_wrist_roll_joint: 0.0
+  left_hip_pitch_joint: 0.0
+  left_hip_roll_joint: 0.0
+  left_hip_yaw_joint: 0.0
+  left_knee_pitch_joint: 0.0
+  left_ankle_pitch_joint: 0.0
+  left_ankle_roll_joint: 0.0
+  right_hip_pitch_joint: 0.0
+  right_hip_roll_joint: 0.0
+  right_hip_yaw_joint: 0.0
+  right_knee_pitch_joint: 0.0
+  right_ankle_pitch_joint: 0.0
+  right_ankle_roll_joint: 0.0
+# ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+
+joint_limits:
+  lumbar_yaw_joint:
+    lower: -1
+    upper: 1
+  lumbar_roll_joint:
+    lower: -0.25
+    upper: 0.25
+  lumbar_pitch_joint:
+    # 与训练 f1.urdf 一致：模型正角度前折；真机方向由 DCU 传动层转换。
+    lower: -0.15
+    upper: 0.45
+  left_shoulder_pitch_joint:
+    lower: -2.5
+    upper: 1.5
+  left_shoulder_roll_joint:
+    lower: -2
+    upper: 0
+  left_shoulder_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  left_elbow_pitch_joint:
+    lower: 0
+    upper: 2
+  left_elbow_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  left_wrist_pitch_joint:
+    lower: -0.4
+    upper: 0.4
+  left_wrist_roll_joint:
+    lower: -0.4
+    upper: 0.4
+  right_shoulder_pitch_joint:
+    lower: -2.5
+    upper: 1.5
+  right_shoulder_roll_joint:
+    lower: -2
+    upper: 0
+  right_shoulder_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  right_elbow_pitch_joint:
+    lower: 0
+    upper: 2
+  right_elbow_yaw_joint:
+    lower: -1.8
+    upper: 1.8
+  right_wrist_pitch_joint:
+    lower: -0.4
+    upper: 0.4
+  right_wrist_roll_joint:
+    lower: -0.4
+    upper: 0.4
+  left_hip_pitch_joint:
+    lower: -1
+    upper: 2
+  left_hip_roll_joint:
+    lower: -1.5
+    upper: 0.2
+  left_hip_yaw_joint:
+    lower: -1.5
+    upper: 1.5
+  left_knee_pitch_joint:
+    lower: 0
+    upper: 2
+  left_ankle_pitch_joint:
+    lower: -0.41
+    upper: 0.35
+  left_ankle_roll_joint:
+    lower: -0.64
+    upper: 0.64
+  right_hip_pitch_joint:
+    lower: -2
+    upper: 1
+  right_hip_roll_joint:
+    lower: -0.2
+    upper: 1.5
+  right_hip_yaw_joint:
+    lower: -1.5
+    upper: 1.5
+  right_knee_pitch_joint:
+    lower: 0
+    upper: 2
+  right_ankle_pitch_joint:
+    lower: -0.41
+    upper: 0.35
+  right_ankle_roll_joint:
+    lower: -0.64
+    upper: 0.64
+# ↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑↑
+
+# ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓ controllers list ↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓↓
+controllers:
+  # idle
+  pd_idle:
+    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
+                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
+                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
+                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    init_state: [0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    stiffness:  [0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    damping:    [0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  # keep
+  pd_keep:
+    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
+                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
+                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
+                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    init_state: [0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0]
+    stiffness:  [500.0, 500.0, 500.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0, 80.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0, 80.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
+    damping:    [5.0,   5.0,   5.0,
+                 1.5,   1.5,   1.5,  1.5, 1.5, 1.5, 1.5,
+                 1.5,   1.5,   1.5,  1.5, 1.5, 1.5, 1.5,
+                 5.0,   5.0,   5.0,  5.0, 5.0, 5.0,
+                 5.0,   5.0,   5.0,  5.0, 5.0, 5.0]
+    is_keep_controller: True  # keep控制器标志
+
+  # zero
+  pd_zero:
+    transition_duration_s: 2.0
+    max_tilt_deg: 35.0
+    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
+                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
+                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
+                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    # A 只进入此零位并保持；B 再进入 stand。这里只改变关节目标，不执行编码器标零。
+    init_state: [0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0]
+    stiffness:  [500.0, 500.0, 500.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0,  80.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0,  80.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
+    damping:    [5.0,   5.0,   5.0,
+                 1.5,   1.5,   1.5,   1.5,   1.5,   1.5,   1.5,
+                 1.5,   1.5,   1.5,   1.5,   1.5,   1.5,   1.5,
+                 5.0,   5.0,   5.0,   5.0,   5.0,   5.0,
+                 5.0,   5.0,   5.0,   5.0,   5.0,   5.0]
+
+  # stand
+  pd_stand:
+    transition_duration_s: 2.0
+    max_tilt_deg: 35.0
+    joint_list: [lumbar_yaw_joint, lumbar_roll_joint, lumbar_pitch_joint,
+                left_shoulder_pitch_joint, left_shoulder_roll_joint, left_shoulder_yaw_joint, left_elbow_pitch_joint, left_elbow_yaw_joint, left_wrist_pitch_joint, left_wrist_roll_joint,
+                right_shoulder_pitch_joint, right_shoulder_roll_joint, right_shoulder_yaw_joint, right_elbow_pitch_joint, right_elbow_yaw_joint, right_wrist_pitch_joint, right_wrist_roll_joint,
+                left_hip_pitch_joint, left_hip_roll_joint, left_hip_yaw_joint, left_knee_pitch_joint, left_ankle_pitch_joint, left_ankle_roll_joint,
+                right_hip_pitch_joint, right_hip_roll_joint, right_hip_yaw_joint, right_knee_pitch_joint, right_ankle_pitch_joint, right_ankle_roll_joint]
+    # 与 AMP 的 pd_zero + pd_stand 覆盖结果一致，显式控制全部 29 关节。
+    init_state: [0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.0,   0.0,   0.0,   0.0,   0.0,   0.0,   0.0,
+                 0.4,   0.05,  -0.31, 0.49,  -0.21, 0.0,
+                 -0.4, -0.05,  0.31,  0.49,  -0.21, 0.0]
+    stiffness:  [500.0, 500.0, 500.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0,  80.0,
+                 80.0,  80.0,  80.0,  80.0,  80.0,  80.0,  80.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0,
+                 300.0, 300.0, 300.0, 300.0, 300.0, 300.0]
+    damping:    [5.0,   5.0,   5.0,
+                 1.5,   1.5,   1.5,   1.5,   1.5,   1.5,   1.5,
+                 1.5,   1.5,   1.5,   1.5,   1.5,   1.5,   1.5,
+                 5.0,   5.0,   5.0,   5.0,   5.0,   5.0,
+                 5.0,   5.0,   5.0,   5.0,   5.0,   5.0]
+
+  # Guide selects default_q preparation, then automatically starts after the ready hold.
+  pd_dance_pose:
+    joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
+                 left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
+                 left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,
+                 left_knee_pitch_joint, left_shoulder_pitch_joint, right_shoulder_pitch_joint,
+                 right_knee_pitch_joint, left_ankle_pitch_joint, left_shoulder_roll_joint,
+                 right_shoulder_roll_joint, right_ankle_pitch_joint, left_ankle_roll_joint,
+                 left_shoulder_yaw_joint, right_shoulder_yaw_joint, right_ankle_roll_joint,
+                 left_elbow_pitch_joint, right_elbow_pitch_joint, left_elbow_yaw_joint,
+                 right_elbow_yaw_joint, left_wrist_pitch_joint, right_wrist_pitch_joint,
+                 left_wrist_roll_joint, right_wrist_roll_joint]
+    init_state: [0.4889, 0.0, -0.4889,
+                 0.0621, 0.0, -0.0621,
+                 -0.3385, 0.0, 0.3385,
+                 0.632, 0.0, 0.0,
+                 0.632, -0.2722, 0.0,
+                 0.0, -0.2722, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.0, 0.0, 0.0,
+                 0.0, 0.0]
+    stiffness: [300.0, 500.0, 300.0,
+                300.0, 500.0, 300.0,
+                300.0, 500.0, 300.0,
+                300.0, 80.0, 80.0,
+                300.0, 300.0, 80.0,
+                80.0, 300.0, 300.0,
+                80.0, 80.0, 300.0,
+                80.0, 80.0, 80.0,
+                80.0, 80.0, 80.0,
+                80.0, 80.0]
+    damping: [5.0, 5.0, 5.0,
+              5.0, 5.0, 5.0,
+              5.0, 5.0, 5.0,
+              5.0, 1.5, 1.5,
+              5.0, 5.0, 1.5,
+              1.5, 5.0, 5.0,
+              1.5, 1.5, 5.0,
+              1.5, 1.5, 1.5,
+              1.5, 1.5, 1.5,
+              1.5, 1.5]
+    transition_duration_s: 4.0
+    max_tilt_deg: 35.0
+
+  # X1 BeyondMimic 29DOF motion tracking; joint order is PhysX policy order.
+  dance_x1:
+    joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
+                 left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
+                 left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,
+                 left_knee_pitch_joint, left_shoulder_pitch_joint, right_shoulder_pitch_joint,
+                 right_knee_pitch_joint, left_ankle_pitch_joint, left_shoulder_roll_joint,
+                 right_shoulder_roll_joint, right_ankle_pitch_joint, left_ankle_roll_joint,
+                 left_shoulder_yaw_joint, right_shoulder_yaw_joint, right_ankle_roll_joint,
+                 left_elbow_pitch_joint, right_elbow_pitch_joint, left_elbow_yaw_joint,
+                 right_elbow_yaw_joint, left_wrist_pitch_joint, right_wrist_pitch_joint,
+                 left_wrist_roll_joint, right_wrist_roll_joint]
+    model_file: cfg/control_module/policy/dance_x1_v11_4999.bin
+    motion_file: cfg/control_module/policy/dance_x1_motion.bin
+    decimation: 20          # 1000 Hz / 20 = 50 Hz
+    prepare_ticks: 0        # pd_dance_pose 完成准备/等待后自动接管，策略内不再做过渡
+    sensor_timeout_ms: 80
+    odom_frame: odom
+    anchor_frame: lumbar_pitch_link
+    base_frame: base_link
+    max_tilt_deg: 35.0
+    max_start_speed: 0.2
+    start_pose: default_q   # 准备位使用训练默认姿态；策略播放仍从参考帧 0 开始
+    max_start_pose_error: 0.12  # Guide 检查实测角度已接近 default_q
+    # 与 AMP 一致，不按 q_target-q_measured 瞬时差判故障；策略正常会产生 >0.8rad 的 PD 误差。
+    max_tracking_error: 0.0
+    max_anchor_error: 0.6
+    joint_limit_margin: 0.0
+    joint_limit_tolerance: 0.01  # 实测角度容差；目标仍严格裁到 joint_limits 内
+    # DCU already converts lumbar pitch into training coordinates (fb8cc78).
+    # All 29 policy joints therefore use +1, including lumbar_pitch_joint.
+    joint_sign: {}

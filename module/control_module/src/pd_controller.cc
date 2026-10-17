@@ -1,6 +1,8 @@
 #include "control_module/pd_controller.h"
 #include <iostream>
 #include <fstream>
+#include <cmath>
+#include <stdexcept>
 
 namespace xyber_x1_infer::rl_control_module {
 
@@ -8,6 +10,16 @@ PDController::PDController(const bool use_sim_handles)
     : ControllerBase(use_sim_handles) {}
 
 void PDController::Init(const YAML::Node &cfg_node) {
+  trans_mode_duration_s_ = cfg_node["transition_duration_s"]
+      ? cfg_node["transition_duration_s"].as<double>() : 2.0;
+  control_frequency_hz_ = cfg_node["control_frequency_hz"]
+      ? cfg_node["control_frequency_hz"].as<int>() : 1000;
+  feedback_max_tilt_deg_ = cfg_node["max_tilt_deg"] ? cfg_node["max_tilt_deg"].as<double>() : 90.0;
+  if (!std::isfinite(trans_mode_duration_s_) || trans_mode_duration_s_ <= 0 ||
+      control_frequency_hz_ <= 0 || !std::isfinite(feedback_max_tilt_deg_) ||
+      feedback_max_tilt_deg_ <= 0 || feedback_max_tilt_deg_ >= 180) {
+    throw std::runtime_error("invalid PD transition duration or control frequency");
+  }
   // 初始化 joint_names_
   joint_names_.clear();
   joint_names_ = cfg_node["joint_list"].as<std::vector<std::string>>();
@@ -73,8 +85,32 @@ void PDController::Update() {
     return;
   }
 
-  trans_mode_percent_ += 1.0 / trans_mode_duration_s_ / 1000;
+  trans_mode_percent_ += 1.0 / trans_mode_duration_s_ / control_frequency_hz_;
   trans_mode_percent_ = std::min(trans_mode_percent_, scalar_t(1));
+}
+
+bool PDController::FeedbackReady() const {
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  const auto joint = last_joint_state_ns_.load(std::memory_order_acquire);
+  const auto imu = last_imu_ns_.load(std::memory_order_acquire);
+  if (joint <= 0 || imu <= 0 || now - joint > 80000000LL || now - imu > 80000000LL) return false;
+  std::shared_lock<std::shared_mutex> lock(imu_mutex_);
+  quaternion_t q(imu_data_.orientation.w, imu_data_.orientation.x,
+                 imu_data_.orientation.y, imu_data_.orientation.z);
+  if (!std::isfinite(q.norm()) || q.norm() < 0.5 || q.norm() > 1.5) return false;
+  q.normalize();
+  return (q * vector3_t::UnitZ()).z() >= std::cos(feedback_max_tilt_deg_ * std::acos(-1.0) / 180.0);
+}
+
+bool PDController::TargetReached(double max_error) const {
+  if (!std::isfinite(max_error) || max_error < 0 || !FeedbackReady()) return false;
+  std::shared_lock<std::shared_mutex> lock(joint_state_mutex_);
+  for (size_t i = 0; i < joint_names_.size(); ++i) {
+    const double measured = joint_state_data_.position[i];
+    if (!std::isfinite(measured) || std::abs(measured - joint_conf_.init_state(i)) > max_error) return false;
+  }
+  return true;
 }
 
 my_ros2_proto::msg::JointCommand PDController::GetJointCmdData() {

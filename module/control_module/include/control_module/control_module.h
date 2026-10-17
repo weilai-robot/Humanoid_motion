@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <thread>
 #include "aimrt_module_cpp_interface/module_base.h"
+#include "control_module/dance_controller.h"
+#include "control_module/dance_start_gate.h"
 #include "control_module/pd_controller.h"
 #include "control_module/rl_controller.h"
 #include "control_module/state_machine.h"
@@ -34,6 +36,8 @@ class ControlModule : public aimrt::ModuleBase {
   bool MainLoop();
   void UpdateRlLoggingState(const std::string& state_name);
   void StatsWorkerLoop();
+  void RestartCurrentState();
+  bool DancePdReady(const std::string& controller_name) const;
 
  private:
   aimrt::CoreRef core_;
@@ -59,6 +63,11 @@ class ControlModule : public aimrt::ModuleBase {
   time_point<high_resolution_clock> last_trigger_time_;
 
   std::string last_state_name_;
+  bool dance_zero_ready_logged_{false};
+  bool dance_stand_ready_logged_{false};
+  bool dance_deployment_{false};
+  double dance_stand_pose_error_{0.12};
+  DanceStartGate dance_start_gate_;
   std::mutex control_loop_mutex_;  // Serialize mode changes with controller Update/GetJointCmdData.
 
   // ── R5 控制周期统计：MainLoop(RT,1kHz) 写直方图双缓冲，StatsWorker(非RT) 每10s 读出落盘 ──

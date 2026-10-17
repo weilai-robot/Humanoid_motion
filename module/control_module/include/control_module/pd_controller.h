@@ -17,11 +17,16 @@ class PDController : public ControllerBase {
 
   void Update() override;
   my_ros2_proto::msg::JointCommand GetJointCmdData() override;
+  bool TransitionComplete() const { return trans_mode_percent_ >= 1.0; }
+  bool FeedbackReady() const;
+  bool TargetReached(double max_error) const;
 
  private:
   // trans mode
   double trans_mode_percent_ = 0.0;     // 0 ~ 1
-  double trans_mode_duration_s_ = 2.0;  // hard code
+  double trans_mode_duration_s_ = 2.0;
+  int control_frequency_hz_ = 1000;
+  double feedback_max_tilt_deg_ = 90.0;
   std::vector<double> start_joint_angles_;
 
   // keep controller config
