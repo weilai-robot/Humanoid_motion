@@ -26,6 +26,7 @@ std::filesystem::path SourceDir() {
 YAML::Node Config() {
   const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance.yaml").string());
   auto cfg = YAML::Clone(root["controllers"]["dance_x1"]);
+  cfg["diagnostics"]["enabled"] = false;  // Tests opt in only when inspecting diagnostic output.
   cfg["state_source"] = "external_topics";  // Preserve the independent golden external-state fixture.
   cfg["joint_limits"] = root["joint_limits"];
   cfg["control_frequency_hz"] = root["control_frequecy"];
@@ -102,6 +103,110 @@ struct Sample {
     controller.SetBaseVelocity(velocity);
   }
 };
+
+std::vector<std::string> DiagnosticCsvRow(const std::string& line) {
+  std::vector<std::string> fields; std::string value; bool quoted = false;
+  for (size_t i = 0; i < line.size(); ++i) {
+    if (line[i] == '"') {
+      if (quoted && i+1 < line.size() && line[i+1] == '"') { value += '"'; ++i; }
+      else quoted = !quoted;
+    } else if (line[i] == ',' && !quoted) { fields.push_back(value); value.clear(); }
+    else value += line[i];
+  }
+  fields.push_back(value); return fields;
+}
+
+TEST(DanceController, DiagnosticsRetainExactActorInputsCommandsAndDistinctAttempts) {
+  auto cfg = Config();
+  const auto dir = std::filesystem::temp_directory_path()/
+      ("dance_controller_diag_"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  cfg["diagnostics"]["enabled"] = true;
+  cfg["diagnostics"]["directory"] = dir.string();
+  cfg["diagnostics"]["flush_ms"] = 10;
+  DanceController controller(true);
+  controller.Init(cfg);
+  ASSERT_TRUE(controller.DiagnosticsEnabled());
+  Sample sample(cfg);
+  sample.joint.effort.assign(29, 1.25);
+  sample.Send(controller);
+  controller.SetDiagnosticState("stand");
+  for (int i = 0; i < 20; ++i) controller.SampleDiagnostics();
+  controller.SetDiagnosticState("dance_ready");
+  controller.RestartController();
+  controller.SetDiagnosticState("dance_x1");
+  controller.Update();
+  ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+  const auto first_command = controller.GetJointCmdData();
+  controller.GetJointCmdData();  // Repeated command access must not duplicate a policy row.
+  for (int tick = 1; tick <= 20; ++tick) {
+    sample.Stamp(); sample.Send(controller); controller.Update(); controller.GetJointCmdData();
+    ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+  }
+  controller.SetDiagnosticState("keep");
+  controller.SetDiagnosticState("dance_ready");
+  controller.RestartController();
+  controller.SetDiagnosticState("dance_x1");
+  controller.Update(); controller.GetJointCmdData();
+  ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+  std::this_thread::sleep_for(std::chrono::milliseconds(90));
+  controller.Update();
+  ASSERT_TRUE(controller.Faulted());
+  controller.StopDiagnostics();
+  ASSERT_FALSE(controller.DiagnosticIoError());
+
+  std::ifstream file(controller.DiagnosticPath()); std::string line;
+  ASSERT_TRUE(bool(std::getline(file, line)));
+  const auto columns = DiagnosticCsvRow(line);
+  std::map<std::string, size_t> index;
+  for (size_t i = 0; i < columns.size(); ++i) index[columns[i]] = i;
+  std::array<float, 160> mean{}, inv_std{};
+  std::ifstream model(cfg["model_file"].as<std::string>(), std::ios::binary);
+  model.seekg(8+7*4+29*32+6*29*4);
+  ASSERT_TRUE(bool(model.read(reinterpret_cast<char*>(mean.data()), sizeof(mean))));
+  ASSERT_TRUE(bool(model.read(reinterpret_cast<char*>(inv_std.data()), sizeof(inv_std))));
+  std::vector<std::pair<int, int>> frames;
+  bool passive = false, fault = false;
+  while (std::getline(file, line)) {
+    const auto row = DiagnosticCsvRow(line);
+    ASSERT_EQ(row.size(), columns.size());
+    if (row[index.at("event")] == "passive") {
+      passive = true;
+      EXPECT_EQ(row[index.at("has_observation")], "0");
+      EXPECT_TRUE(std::isnan(std::stod(row[index.at("obs_raw_0")])));
+    }
+    if (row[index.at("event")] == "fault") {
+      fault = true;
+      EXPECT_EQ(row[index.at("snapshot_valid")], "0");
+      EXPECT_EQ(row[index.at("command_valid")], "0");
+      EXPECT_NE(row[index.at("reason")].find("joint feedback"), std::string::npos);
+    }
+    if (row[index.at("event")] != "policy") continue;
+    frames.emplace_back(std::stoi(row[index.at("session")]), std::stoi(row[index.at("policy_frame")]));
+    EXPECT_EQ(row[index.at("has_observation")], "1");
+    EXPECT_EQ(row[index.at("command_valid")], "1");
+    EXPECT_EQ(row[index.at("estimator_valid")], "0");  // External fixtures must not fabricate estimator data.
+    for (int i = 0; i < 160; ++i) {
+      const double raw = std::stod(row[index.at("obs_raw_"+std::to_string(i))]);
+      const double normalized = std::stod(row[index.at("obs_normalized_"+std::to_string(i))]);
+      EXPECT_NEAR(normalized, (raw-mean[i])*inv_std[i], 1e-4);
+    }
+    if (frames.size() == 1) {
+      for (size_t i = 0; i < first_command.name.size(); ++i) {
+        EXPECT_DOUBLE_EQ(std::stod(row[index.at("command_position_"+first_command.name[i])]), first_command.position[i]);
+        EXPECT_DOUBLE_EQ(std::stod(row[index.at("joint_effort_"+first_command.name[i])]), 1.25);
+        EXPECT_DOUBLE_EQ(std::stod(row[index.at("obs_raw_"+std::to_string(131+i))]), 0);
+      }
+    }
+  }
+  EXPECT_TRUE(passive);
+  EXPECT_TRUE(fault);
+  const std::vector<std::pair<int, int>> expected{{1,0}, {1,1}, {2,0}};
+  EXPECT_EQ(frames, expected);
+  const auto saved = YAML::LoadFile(controller.DiagnosticPath()+".yaml");
+  EXPECT_EQ(saved["state_source"].as<std::string>(), "external_topics");
+  EXPECT_EQ(saved["joint_list"].as<std::vector<std::string>>(), cfg["joint_list"].as<std::vector<std::string>>());
+  std::filesystem::remove_all(dir);
+}
 
 TEST(DanceController, FirstFrameMatchesV11Checkpoint) {
   auto cfg = Config();

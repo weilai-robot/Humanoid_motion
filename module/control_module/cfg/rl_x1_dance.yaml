@@ -349,6 +349,10 @@ controllers:
 
   # X1 BeyondMimic 29DOF motion tracking; joint order is PhysX policy order.
   dance_x1:
+    diagnostics:
+      enabled: true
+      directory: test_logs/data_csv
+      flush_ms: 100  # independent writer; 50 Hz samples plus lifecycle events
     state_source: proprioceptive  # IMU + leg feedback -> body estimate -> source-time waist FK
     state_estimator:
       acceleration_scale: 1.0  # DCU must report specific force in m/s^2; static norm ~9.81

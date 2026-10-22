@@ -20,6 +20,7 @@
 #include "control_module/controller_base.h"
 #include "control_module/dance_state_adapter.h"
 #include "control_module/dance_estimator_inputs.h"
+#include "control_module/dance_diagnostics.h"
 
 namespace xyber_x1_infer::rl_control_module {
 
@@ -53,6 +54,12 @@ class DanceController final : public ControllerBase {
   bool Faulted() const { return faulted_; }
   bool Finished() const { return finished_; }
   const std::string& FaultReason() const { return fault_reason_; }
+  void SetDiagnosticState(const std::string& state);
+  void SampleDiagnostics();  // called at 1 kHz; passive phases are sampled at 50 Hz
+  void StopDiagnostics() { diagnostics_.Stop(); }
+  const std::string& DiagnosticPath() const { return diagnostics_.Path(); }
+  bool DiagnosticIoError() const { return diagnostics_.IoError(); }
+  bool DiagnosticsEnabled() const { return diagnostics_.Enabled(); }
 
  private:
   static constexpr int kJoints = 29;
@@ -73,6 +80,13 @@ class DanceController final : public ControllerBase {
   struct Snapshot {
     std::array<double, kJoints> joint_pos{};
     std::array<double, kJoints> joint_vel{};
+    std::array<double, kJoints> joint_effort{};
+    int64_t joint_stamp_ns{}, imu_stamp_ns{}, body_stamp_ns{}, anchor_stamp_ns{}, velocity_stamp_ns{};
+    std::array<double, 3> body_position{};
+    std::array<double, 4> body_orientation{};
+    DanceBodyStateEstimator::Output estimate;
+    bool estimator_valid{};
+    Eigen::Vector3f imu_accel{Eigen::Vector3f::Zero()};
     Eigen::Quaternionf base_quat{Eigen::Quaternionf::Identity()};
     Eigen::Vector3f base_ang_vel{Eigen::Vector3f::Zero()};
     Eigen::Vector3f base_lin_vel{Eigen::Vector3f::Zero()};
@@ -85,10 +99,15 @@ class DanceController final : public ControllerBase {
   bool ReadSnapshot(Snapshot& snapshot, const char** reason = nullptr) const;
   void ComputeObservation(const Snapshot& snapshot, const MotionFrame& frame);
   void Infer();
-  void SetFault(const char* reason);
+  void SetFault(const char* reason, const Snapshot* snapshot = nullptr,
+                bool has_observation = false, bool has_action = false, const char* detail = nullptr);
   void AlignReference(const Snapshot& snapshot);
   float ClipTarget(int index, float target) const;
   void UpdateBodyEstimate();  // Caller holds estimator_mutex_, never sensor_mutex_.
+  void StoreOdometry(const nav_msgs::msg::Odometry& odometry,
+                     const DanceBodyStateEstimator::Output* estimate);
+  DanceDiagnostics::Frame DiagnosticFrame(const Snapshot* snapshot, const char* event,
+                                         const char* reason, bool has_observation, bool has_action) const;
 
   std::array<float, kJoints> default_pos_{};
   std::array<float, kJoints> preparation_pos_{};
@@ -102,6 +121,7 @@ class DanceController final : public ControllerBase {
   std::array<float, kObs> mean_{};
   std::array<float, kObs> inv_std_{};
   std::array<float, kObs> observation_{};
+  std::array<float, kObs> raw_observation_{};
   std::array<float, kJoints> last_action_{};
   std::array<float, kJoints> target_pos_{};
   Snapshot current_;
@@ -119,6 +139,8 @@ class DanceController final : public ControllerBase {
     std::array<double, 4> orientation{};
     Eigen::Vector3f linear_velocity{Eigen::Vector3f::Zero()};
     Clock::time_point received{};
+    DanceBodyStateEstimator::Output estimate;
+    bool estimator_valid{};
   };
   static constexpr size_t kOdometryHistoryCapacity = 128;
   std::array<BodyOdometry, kOdometryHistoryCapacity> body_odometry_history_;
@@ -160,6 +182,12 @@ class DanceController final : public ControllerBase {
   std::string fault_reason_;
   Eigen::Quaternionf reference_alignment_quat_{Eigen::Quaternionf::Identity()};
   Eigen::Vector3f reference_alignment_pos_{Eigen::Vector3f::Zero()};
+  DanceDiagnostics diagnostics_;
+  DanceDiagnostics::Frame diagnostic_pending_frame_;
+  bool diagnostic_pending_{false}, diagnostic_session_pending_{false};
+  uint64_t diagnostic_session_{}, diagnostic_passive_tick_{};
+  std::string diagnostic_state_{"idle"}, state_source_;
+  Clock::time_point diagnostic_state_since_{};
 };
 
 }  // namespace xyber_x1_infer::rl_control_module

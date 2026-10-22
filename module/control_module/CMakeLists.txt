@@ -85,6 +85,11 @@ if(XYBER_X1_INFER_BUILD_TESTS)
   add_executable(${DANCE_ESTIMATOR_CHECK_TARGET} test/dance_state_estimator_check.cc)
   target_include_directories(${DANCE_ESTIMATOR_CHECK_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
   add_test(NAME ${DANCE_ESTIMATOR_CHECK_TARGET} COMMAND ${DANCE_ESTIMATOR_CHECK_TARGET})
+  set(DANCE_DIAGNOSTICS_CHECK_TARGET ${CUR_TARGET_NAME}_dance_diagnostics_check)
+  add_executable(${DANCE_DIAGNOSTICS_CHECK_TARGET} test/dance_diagnostics_check.cc)
+  target_include_directories(${DANCE_DIAGNOSTICS_CHECK_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(${DANCE_DIAGNOSTICS_CHECK_TARGET} PRIVATE Threads::Threads)
+  add_test(NAME ${DANCE_DIAGNOSTICS_CHECK_TARGET} COMMAND ${DANCE_DIAGNOSTICS_CHECK_TARGET})
 endif()
 
 # Install config files

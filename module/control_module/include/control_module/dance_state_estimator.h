@@ -129,6 +129,7 @@ class DanceBodyStateEstimator {
   struct Output {
     int64_t stamp_ns{};
     Vec position{}, velocity_body{}, position_variance{}, velocity_variance{};
+    Vec acceleration_world{}, acceleration_bias_world{};  // diagnostics; filter behavior is unchanged
     Quat orientation{1, 0, 0, 0};
     std::array<double, 2> vertical_force{};
     std::array<bool, 2> contact{};
@@ -252,9 +253,11 @@ class DanceBodyStateEstimator {
     }
     out.stamp_ns = input.stamp_ns;
     out.orientation = input.orientation;
+    out.acceleration_world = acceleration;
     Vec velocity{};
     for (size_t axis = 0; axis < 3; ++axis) {
       out.position[axis] = filters_[axis].x[0];
+      out.acceleration_bias_world[axis] = filters_[axis].x[2];
       velocity[axis] = filters_[axis].x[1];
       out.position_variance[axis] = filters_[axis].p[0][0];
       out.velocity_variance[axis] = filters_[axis].p[1][1];

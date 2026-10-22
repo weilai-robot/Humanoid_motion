@@ -176,6 +176,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       const auto dance_controller = controller_map_.find("dance_x1");
       if (dance_controller != controller_map_.end()) {
         const auto dance = std::dynamic_pointer_cast<DanceController>(dance_controller->second);
+        if (dance->DiagnosticsEnabled()) AIMRT_INFO("Dance diagnostics: {}", dance->DiagnosticPath());
+        else AIMRT_WARN("Dance diagnostics disabled or file worker could not start");
         const auto all_joints = cfg_node["joint_list"].as<std::vector<std::string>>();
         for (const std::string name : {"pd_zero", "pd_stand"}) {
           AIMRT_CHECK_ERROR_THROW(cfg_node["controllers"][name] &&
@@ -363,6 +365,9 @@ void ControlModule::UpdateRlLoggingState(const std::string& state_name) {
   int active_rl_count = 0;
 
   for (auto& [name, controller] : controller_map_) {
+    if (const auto dance = std::dynamic_pointer_cast<DanceController>(controller)) {
+      dance->SetDiagnosticState(state_name);
+    }
     auto rl_controller = std::dynamic_pointer_cast<RLController>(controller);
     if (!rl_controller) {
       continue;
@@ -411,6 +416,14 @@ void ControlModule::Shutdown() {
     if (rl_controller) {
       rl_controller->StopLoggingWorker();
     }
+  }
+  // Serialize with all diagnostic producers before draining the file worker.
+  std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
+  if (const auto it = controller_map_.find("dance_x1"); it != controller_map_.end()) {
+    const auto dance = std::dynamic_pointer_cast<DanceController>(it->second);
+    dance->SetDiagnosticState("shutdown");
+    dance->StopDiagnostics();
+    if (dance->DiagnosticIoError()) AIMRT_ERROR("Dance diagnostic write/flush failed: {}", dance->DiagnosticPath());
   }
 }
 
@@ -564,6 +577,9 @@ bool ControlModule::MainLoop() {
           }
         } else {
           aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);
+        }
+        if (dance_deployment_) {
+          std::dynamic_pointer_cast<DanceController>(controller_map_.at("dance_x1"))->SampleDiagnostics();
         }
       }
 

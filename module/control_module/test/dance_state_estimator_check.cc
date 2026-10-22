@@ -72,6 +72,15 @@ void CheckFilter(const std::array<double, 59>& row) {
   Check(ready, "loaded stationary fixture must initialize");
   Check(std::abs(out.position[2]-row[58]) < 0.002, "estimated base height must match independent foot geometry");
   for (double v : out.velocity_body) Check(std::abs(v) < 1e-7, "static bias must not cause velocity drift");
+  const auto rotated = dance_estimation_detail::Rotate(in.orientation, in.acceleration);
+  for (size_t axis = 0; axis < 3; ++axis) {
+    const double expected = rotated[axis] - (axis == 2 ? 9.81 : 0.0);
+    Check(std::abs(out.acceleration_world[axis]-expected) < 1e-9, "diagnostic acceleration is gravity removed in world axes");
+    // The bias continues to adapt while foot-height measurements settle.
+    Check(std::abs(out.acceleration_bias_world[axis]-expected) < 1e-5, "diagnostic bias stays near the injected static bias");
+    Check(std::isfinite(out.position_variance[axis]) && out.position_variance[axis] > 0,
+          "diagnostic covariance is finite and positive");
+  }
   Check(std::hypot(out.position[0], out.position[1]) < 1e-7, "static base position must not drift");
   Check(!estimator.Update(in, out), "repeated timestamps must not advance filter");
   in.stamp_ns += 20000000;
