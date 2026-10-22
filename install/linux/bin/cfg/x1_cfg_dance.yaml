@@ -1,8 +1,9 @@
 # ============================================================
 # x1_cfg_dance.yaml — X1 BeyondMimic 舞蹈吊架联调专用
 # 三键：A=zero，B=stand，Guide=准备位 -> 自动播放。
-# /dance/anchor_pose 和 /dance/base_velocity 必须由经验证的
-# 状态估计器提供；缺失时 /dance_start 会被拒绝。
+# 默认 C++ 本体估计：IMU + 双腿位置/速度/力矩；发布 /dance/odometry 供检查。
+# 完整 odom -> base_link 位姿，twist 在 base_link；按源时间同步并计算腰部锚点。
+# 先以落地静止反馈校准；缺失/失效估计时不开始播放。无需 Python 或导航里程计。
 # 启动: cd build && bash ./run_dance.sh
 # ============================================================
 aimrt:
@@ -34,11 +35,19 @@ aimrt:
     backends: # 消息队列后端配置
       - type: local
       - type: ros2
+        options:
+          sub_topics_options:
+            - topic_name: "/dance/odometry"
+              qos:
+                history: keep_last
+                depth: 5
+                reliability: best_effort
+                durability: volatile
     pub_topics_options: # 为 publish topic 选择后端
       - topic_name: "(.*)"
         enable_backends: [local, ros2]
     sub_topics_options: # 为 subscribe topic 选择后端
-      - topic_name: "/(idle_mode|zero_mode|stand_mode|keep_mode|dance_start|dance/anchor_pose|dance/base_velocity)"
+      - topic_name: "/(idle_mode|zero_mode|stand_mode|keep_mode|dance_start|dance/odometry|dance/anchor_pose|dance/base_velocity)"
         enable_backends: [local, ros2]
       - topic_name: "(.*)"
         enable_backends: [local]

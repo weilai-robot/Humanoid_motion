@@ -6,19 +6,25 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <vector>
+#include <utility>
 
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <nav_msgs/msg/odometry.hpp>
 
 #include "control_module/controller_base.h"
+#include "control_module/dance_state_adapter.h"
+#include "control_module/dance_estimator_inputs.h"
 
 namespace xyber_x1_infer::rl_control_module {
 
-// BeyondMimic X1 motion tracking. The state estimator must publish the pose of
-// lumbar_pitch_link in odom and the base_link linear velocity in body axes.
+// BeyondMimic X1 motion tracking. Estimate body state from IMU/leg feedback or
+// accept body odometry; compute the anchor with source-time waist FK.
 // Missing or stale estimates prevent entry and stop a running dance.
 class DanceController final : public ControllerBase {
  public:
@@ -34,8 +40,15 @@ class DanceController final : public ControllerBase {
       const std::unordered_map<std::string, int>& joint_state_index_map) override;
   void SetAnchorPose(const geometry_msgs::msg::TransformStamped& pose);
   void SetBaseVelocity(const geometry_msgs::msg::TwistStamped& velocity);
+  void SetOdometry(const nav_msgs::msg::Odometry& odometry);
 
-  bool Ready() const;
+  bool UsesOdometry() const { return use_odometry_; }
+  bool UsesProprioceptiveEstimator() const { return use_proprioception_; }
+  // Set during module initialization, before sensor subscriptions are started.
+  void SetEstimatedOdometryCallback(std::function<void(const nav_msgs::msg::Odometry&)> callback) {
+    estimated_odometry_callback_ = std::move(callback);
+  }
+  bool Ready(const char** reason = nullptr) const;
   std::vector<double> PreparationPositions() const;
   bool Faulted() const { return faulted_; }
   bool Finished() const { return finished_; }
@@ -69,12 +82,13 @@ class DanceController final : public ControllerBase {
 
   void LoadModel(const std::string& path);
   void LoadMotion(const std::string& path);
-  bool ReadSnapshot(Snapshot& snapshot) const;
+  bool ReadSnapshot(Snapshot& snapshot, const char** reason = nullptr) const;
   void ComputeObservation(const Snapshot& snapshot, const MotionFrame& frame);
   void Infer();
   void SetFault(const char* reason);
   void AlignReference(const Snapshot& snapshot);
   float ClipTarget(int index, float target) const;
+  void UpdateBodyEstimate();  // Caller holds estimator_mutex_, never sensor_mutex_.
 
   std::array<float, kJoints> default_pos_{};
   std::array<float, kJoints> preparation_pos_{};
@@ -98,6 +112,29 @@ class DanceController final : public ControllerBase {
   mutable std::shared_mutex sensor_mutex_;
   mutable std::shared_mutex pose_mutex_;
   mutable std::shared_mutex velocity_mutex_;
+  mutable std::shared_mutex odometry_mutex_;
+  struct BodyOdometry {
+    builtin_interfaces::msg::Time stamp;
+    std::array<double, 3> position{};
+    std::array<double, 4> orientation{};
+    Eigen::Vector3f linear_velocity{Eigen::Vector3f::Zero()};
+    Clock::time_point received{};
+  };
+  static constexpr size_t kOdometryHistoryCapacity = 128;
+  std::array<BodyOdometry, kOdometryHistoryCapacity> body_odometry_history_;
+  size_t odometry_next_{};
+  size_t odometry_count_{};
+  const char* odometry_problem_{"no accepted body odometry; start the body state estimator"};
+  bool use_odometry_{false};
+  bool use_proprioception_{false};
+  std::array<size_t, 12> leg_indices_{};
+  std::mutex estimator_mutex_;
+  DanceEstimatorInputs estimator_inputs_;
+  DanceBodyStateEstimator body_estimator_;
+  std::function<void(const nav_msgs::msg::Odometry&)> estimated_odometry_callback_;
+  int64_t last_estimate_publication_ns_{};
+  std::array<size_t, 3> waist_indices_{};
+  DanceWaistHistory waist_history_;  // Protected by sensor_mutex_.
   geometry_msgs::msg::TransformStamped anchor_pose_;
   geometry_msgs::msg::TwistStamped base_velocity_;
   Clock::time_point last_joint_{};

@@ -10,6 +10,8 @@ dance_stand_pose_error: 0.12
 sub_joy_vel_name: /cmd_vel_limiter
 sub_imu_data_name: /imu/data
 sub_joint_state_name: /joint_states
+sub_dance_odometry_name: /dance/odometry  # proprioceptive: inspection output; odometry: external input
+# The following two topics are only used with state_source: external_topics.
 sub_dance_anchor_name: /dance/anchor_pose
 sub_dance_base_velocity_name: /dance/base_velocity
 sub_actuator_cmd_name: /actuator_cmd
@@ -347,6 +349,21 @@ controllers:
 
   # X1 BeyondMimic 29DOF motion tracking; joint order is PhysX policy order.
   dance_x1:
+    state_source: proprioceptive  # IMU + leg feedback -> body estimate -> source-time waist FK
+    state_estimator:
+      acceleration_scale: 1.0  # DCU must report specific force in m/s^2; static norm ~9.81
+      imu_position_in_base: [0.0, 0.0, 0.0]  # training IMU site; confirm physical lower-DCU offset
+      initialization_s: 0.5  # continuous stationary calibration with loaded feet
+      contact_on_force: 35.0
+      contact_off_force: 15.0
+      acceleration_noise: 0.1
+      bias_noise: 0.01
+      position_noise: 0.03
+      velocity_noise: 0.3
+      height_noise: 0.01
+      contact_velocity_limit: 0.25
+      max_gap_s: 0.01
+      max_flight_s: 0.35
     joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
                  left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
                  left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,

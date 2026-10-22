@@ -45,6 +45,7 @@ class ControlModule : public aimrt::ModuleBase {
 
   std::vector<aimrt::channel::SubscriberRef> subs_;
   aimrt::channel::PublisherRef joint_cmd_pub_;
+  aimrt::channel::PublisherRef dance_odometry_pub_;
 
   StateMachine state_machine_;
   std::set<std::string> trigger_topics_;//// 添加重复的 trigger_topic 会报错，这里用 set 来存储
@@ -68,6 +69,7 @@ class ControlModule : public aimrt::ModuleBase {
   bool dance_deployment_{false};
   double dance_stand_pose_error_{0.12};
   DanceStartGate dance_start_gate_;
+  std::chrono::steady_clock::time_point dance_next_ready_report_{};
   std::mutex control_loop_mutex_;  // Serialize mode changes with controller Update/GetJointCmdData.
 
   // ── R5 控制周期统计：MainLoop(RT,1kHz) 写直方图双缓冲，StatsWorker(非RT) 每10s 读出落盘 ──

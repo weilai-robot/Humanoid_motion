@@ -78,6 +78,59 @@ void DanceController::Init(const YAML::Node& cfg) {
   odom_frame_ = cfg["odom_frame"].as<std::string>();
   anchor_frame_ = cfg["anchor_frame"].as<std::string>();
   base_frame_ = cfg["base_frame"].as<std::string>();
+  const std::string state_source = cfg["state_source"] ? cfg["state_source"].as<std::string>() : "external_topics";
+  if (state_source != "odometry" && state_source != "external_topics" && state_source != "proprioceptive") {
+    throw std::runtime_error("dance state_source must be odometry, proprioceptive or external_topics");
+  }
+  use_proprioception_ = state_source == "proprioceptive";
+  use_odometry_ = state_source == "odometry" || use_proprioception_;
+  if (use_proprioception_) {
+    DanceBodyStateEstimator::Config estimator_cfg;
+    const auto c = cfg["state_estimator"];
+    if (c) {
+      const auto read = [&c](const char* key, double& value) {
+        if (c[key]) value = c[key].as<double>();
+        if (!std::isfinite(value) || value <= 0) throw std::runtime_error(std::string("invalid state_estimator.")+key);
+      };
+      read("acceleration_scale", estimator_cfg.acceleration_scale);
+      read("initialization_s", estimator_cfg.initialization_s);
+      read("contact_on_force", estimator_cfg.contact_on_force);
+      read("contact_off_force", estimator_cfg.contact_off_force);
+      read("acceleration_noise", estimator_cfg.acceleration_noise);
+      read("bias_noise", estimator_cfg.bias_noise);
+      read("position_noise", estimator_cfg.position_noise);
+      read("velocity_noise", estimator_cfg.velocity_noise);
+      read("height_noise", estimator_cfg.height_noise);
+      read("max_gap_s", estimator_cfg.max_gap_s);
+      read("max_flight_s", estimator_cfg.max_flight_s);
+      read("contact_velocity_limit", estimator_cfg.contact_velocity_limit);
+      if (c["imu_position_in_base"]) {
+        const auto offset = c["imu_position_in_base"].as<std::vector<double>>();
+        if (offset.size() != 3 || !std::all_of(offset.begin(), offset.end(), [](double v) { return std::isfinite(v); }))
+          throw std::runtime_error("state_estimator.imu_position_in_base must have three finite coordinates");
+        std::copy(offset.begin(), offset.end(), estimator_cfg.imu_position_in_base.begin());
+      }
+    }
+    if (estimator_cfg.contact_on_force <= estimator_cfg.contact_off_force || estimator_cfg.max_gap_s > 0.01)
+      throw std::runtime_error("invalid estimator contact hysteresis or source-time gap");
+    body_estimator_ = DanceBodyStateEstimator(estimator_cfg);
+    for (size_t i = 0; i < leg_indices_.size(); ++i) {
+      const auto it = std::find(joint_names_.begin(), joint_names_.end(), kDanceLegJointNames[i]);
+      if (it == joint_names_.end()) throw std::runtime_error("body estimator missing leg joint");
+      leg_indices_[i] = std::distance(joint_names_.begin(), it);
+    }
+  }
+  if (use_odometry_) {
+    if (base_frame_ != "base_link" || anchor_frame_ != "lumbar_pitch_link") {
+      throw std::runtime_error("X1 waist FK requires base_link and lumbar_pitch_link frames");
+    }
+    const std::array<std::string, 3> names{"lumbar_yaw_joint", "lumbar_roll_joint", "lumbar_pitch_joint"};
+    for (size_t i = 0; i < names.size(); ++i) {
+      const auto it = std::find(joint_names_.begin(), joint_names_.end(), names[i]);
+      if (it == joint_names_.end()) throw std::runtime_error("X1 waist FK missing joint: " + names[i]);
+      waist_indices_[i] = std::distance(joint_names_.begin(), it);
+    }
+  }
   const int control_hz = cfg["control_frequency_hz"].as<int>();
   if (control_hz != 1000 || decimation_ != 20 || prepare_ticks != 0 ||
       sensor_timeout_ms_ <= 0 || sensor_timeout_ms_ > 80 ||
@@ -248,12 +301,24 @@ void DanceController::SetImuData(const sensor_msgs::msg::Imu value) {
   if (StampNs(value.header.stamp) <= StampNs(imu_data_.header.stamp)) return;
   imu_data_ = value;
   last_imu_ = Clock::now();
+  lock.unlock();
+  if (use_proprioception_) {
+    DanceBodyStateEstimator::Input input;
+    input.stamp_ns = StampNs(value.header.stamp);
+    input.orientation = {value.orientation.w, value.orientation.x, value.orientation.y, value.orientation.z};
+    input.gyro = {value.angular_velocity.x, value.angular_velocity.y, value.angular_velocity.z};
+    input.acceleration = {value.linear_acceleration.x, value.linear_acceleration.y, value.linear_acceleration.z};
+    std::lock_guard<std::mutex> estimator_lock(estimator_mutex_);
+    estimator_inputs_.PushImu(input);
+    UpdateBodyEstimate();
+  }
 }
 
 void DanceController::SetJointStateData(
     const sensor_msgs::msg::JointState value,
     const std::unordered_map<std::string, int>& index) {
   if (value.position.size() < value.name.size() || value.velocity.size() < value.name.size() ||
+      (use_proprioception_ && value.effort.size() < value.name.size()) ||
       !FreshStamp(value.header.stamp, sensor_timeout_ms_, use_sim_handles_)) return;
   std::unique_lock<std::shared_mutex> lock(sensor_mutex_);
   if (StampNs(value.header.stamp) <= StampNs(joint_state_data_.header.stamp)) return;
@@ -263,7 +328,8 @@ void DanceController::SetJointStateData(
         static_cast<size_t>(it->second) >= value.name.size() ||
         value.name[it->second] != joint_names_[i]) return;
     const int slot = it->second;
-    if (!std::isfinite(value.position[slot]) || !std::isfinite(value.velocity[slot])) return;
+    if (!std::isfinite(value.position[slot]) || !std::isfinite(value.velocity[slot]) ||
+        (use_proprioception_ && !std::isfinite(value.effort[slot]))) return;
   }
   for (int i = 0; i < kJoints; ++i) {
     const int slot = index.at(joint_names_[i]);
@@ -271,10 +337,71 @@ void DanceController::SetJointStateData(
     joint_state_data_.velocity[i] = joint_sign_[i] * value.velocity[slot];
   }
   joint_state_data_.header = value.header;
+  if (use_odometry_) {
+    waist_history_.Push(StampNs(value.header.stamp),
+        {joint_state_data_.position[waist_indices_[0]], joint_state_data_.position[waist_indices_[1]],
+         joint_state_data_.position[waist_indices_[2]]});
+  }
   last_joint_ = Clock::now();
+  DanceEstimatorInputs::Joints legs{};
+  if (use_proprioception_) {
+    for (size_t i = 0; i < leg_indices_.size(); ++i) {
+      const size_t j = leg_indices_[i];
+      legs[i] = joint_state_data_.position[j];
+      legs[12+i] = joint_state_data_.velocity[j];
+      legs[24+i] = joint_sign_[j]*value.effort[index.at(joint_names_[j])];
+    }
+  }
+  lock.unlock();
+  if (use_proprioception_) {
+    std::lock_guard<std::mutex> estimator_lock(estimator_mutex_);
+    estimator_inputs_.PushJoints(StampNs(value.header.stamp), legs);
+    UpdateBodyEstimate();
+  }
+}
+
+void DanceController::UpdateBodyEstimate() {
+  DanceBodyStateEstimator::Input input;
+  while (estimator_inputs_.Next(input)) {
+    nav_msgs::msg::Odometry odometry;
+    odometry.header.stamp.sec = static_cast<int32_t>(input.stamp_ns/1000000000LL);
+    odometry.header.stamp.nanosec = static_cast<uint32_t>(input.stamp_ns%1000000000LL);
+    if (!FreshStamp(odometry.header.stamp, sensor_timeout_ms_, use_sim_handles_)) continue;
+    DanceBodyStateEstimator::Output state;
+    if (!body_estimator_.Update(input, state)) {
+      std::unique_lock<std::shared_mutex> lock(odometry_mutex_);
+      odometry_problem_ = body_estimator_.Problem();
+      continue;
+    }
+    odometry.header.frame_id = odom_frame_;
+    odometry.child_frame_id = base_frame_;
+    auto& p = odometry.pose.pose.position;
+    auto& q = odometry.pose.pose.orientation;
+    auto& v = odometry.twist.twist.linear;
+    auto& w = odometry.twist.twist.angular;
+    p.x = state.position[0]; p.y = state.position[1]; p.z = state.position[2];
+    q.w = state.orientation[0]; q.x = state.orientation[1]; q.y = state.orientation[2]; q.z = state.orientation[3];
+    v.x = state.velocity_body[0]; v.y = state.velocity_body[1]; v.z = state.velocity_body[2];
+    w.x = input.gyro[0]; w.y = input.gyro[1]; w.z = input.gyro[2];
+    const Eigen::Matrix3d rotation = Eigen::Quaterniond(q.w, q.x, q.y, q.z).toRotationMatrix();
+    const Eigen::Vector3d variance(state.velocity_variance[0], state.velocity_variance[1], state.velocity_variance[2]);
+    const Eigen::Matrix3d body_covariance = rotation.transpose()*variance.asDiagonal()*rotation;
+    for (size_t i = 0; i < 3; ++i) {
+      odometry.pose.covariance[7*i] = state.position_variance[i];
+      odometry.pose.covariance[7*(i+3)] = 0.001;  // nominal IMU uncertainty; attitude is not estimated here
+      odometry.twist.covariance[7*(i+3)] = 0.001;
+      for (size_t j = 0; j < 3; ++j) odometry.twist.covariance[6*i+j] = body_covariance(i, j);
+    }
+    SetOdometry(odometry);
+    if (estimated_odometry_callback_ && input.stamp_ns-last_estimate_publication_ns_ >= 20000000) {
+      last_estimate_publication_ns_ = input.stamp_ns;
+      estimated_odometry_callback_(odometry);  // 50 Hz inspection; internal feedback remains at sensor rate.
+    }
+  }
 }
 
 void DanceController::SetAnchorPose(const geometry_msgs::msg::TransformStamped& pose) {
+  if (use_odometry_) return;
   if (pose.header.frame_id != odom_frame_ || pose.child_frame_id != anchor_frame_ ||
       !FreshStamp(pose.header.stamp, sensor_timeout_ms_, use_sim_handles_)) return;
   const auto q = ToQuat(pose.transform.rotation);
@@ -287,6 +414,7 @@ void DanceController::SetAnchorPose(const geometry_msgs::msg::TransformStamped& 
 }
 
 void DanceController::SetBaseVelocity(const geometry_msgs::msg::TwistStamped& velocity) {
+  if (use_odometry_) return;
   if (velocity.header.frame_id != base_frame_ ||
       !FreshStamp(velocity.header.stamp, sensor_timeout_ms_, use_sim_handles_) ||
       !std::isfinite(velocity.twist.linear.x) || !std::isfinite(velocity.twist.linear.y) ||
@@ -297,14 +425,71 @@ void DanceController::SetBaseVelocity(const geometry_msgs::msg::TwistStamped& ve
   last_velocity_ = Clock::now();
 }
 
-bool DanceController::ReadSnapshot(Snapshot& out) const {
+void DanceController::SetOdometry(const nav_msgs::msg::Odometry& odometry) {
+  if (!use_odometry_) return;
+  std::unique_lock<std::shared_mutex> lock(odometry_mutex_);
+  if (odometry.header.frame_id != odom_frame_ || odometry.child_frame_id != base_frame_) {
+    odometry_problem_ = "odometry frames mismatch: expected odom -> base_link, not Nav2 base_footprint";
+    return;
+  }
+  if (!FreshStamp(odometry.header.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+    odometry_problem_ = "body odometry source timestamp is stale or invalid";
+    return;
+  }
+  const auto& p = odometry.pose.pose.position;
+  const auto& q = odometry.pose.pose.orientation;
+  const auto& v = odometry.twist.twist.linear;
+  if (!ValidQuat(ToQuat(q)) || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+      !std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) {
+    odometry_problem_ = "body odometry has invalid position, orientation or linear velocity";
+    return;
+  }
+  if (odometry_count_ && StampNs(odometry.header.stamp) <=
+      StampNs(body_odometry_history_[(odometry_next_ + kOdometryHistoryCapacity - 1) % kOdometryHistoryCapacity].stamp)) {
+    odometry_problem_ = "body odometry source timestamp is not advancing";
+    return;
+  }
+  auto& sample = body_odometry_history_[odometry_next_];
+  sample.stamp = odometry.header.stamp;
+  sample.position = {p.x, p.y, p.z};
+  sample.orientation = {q.w, q.x, q.y, q.z};
+  sample.linear_velocity = Eigen::Vector3f(v.x, v.y, v.z);
+  sample.received = Clock::now();
+  odometry_next_ = (odometry_next_ + 1) % kOdometryHistoryCapacity;
+  if (odometry_count_ < kOdometryHistoryCapacity) ++odometry_count_;
+  odometry_problem_ = "body odometry stream stopped or source timestamp expired";
+}
+
+bool DanceController::ReadSnapshot(Snapshot& out, const char** reason) const {
+  const auto fail = [reason](const char* message) {
+    if (reason) *reason = message;
+    return false;
+  };
   const auto now = Clock::now();
   const auto max_age = std::chrono::milliseconds(sensor_timeout_ms_);
+  BodyOdometry odometry;
+  // Fixed lock order: odometry then joint/IMU. Setters take only their own lock.
+  std::shared_lock<std::shared_mutex> odometry_lock;
+  if (use_odometry_) {
+    odometry_lock = std::shared_lock<std::shared_mutex>(odometry_mutex_);
+    if (!odometry_count_) return fail(odometry_problem_);
+    const auto& newest = body_odometry_history_[(odometry_next_ + kOdometryHistoryCapacity - 1) % kOdometryHistoryCapacity];
+    if (now - newest.received > max_age ||
+        !FreshStamp(newest.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+      return fail(odometry_problem_);
+    }
+  }
+  DanceWaistHistory::Positions waist{};
   {
     std::shared_lock<std::shared_mutex> lock(sensor_mutex_);
-    if (now - last_joint_ > max_age || now - last_imu_ > max_age ||
-        !FreshStamp(joint_state_data_.header.stamp, sensor_timeout_ms_, use_sim_handles_) ||
-        !FreshStamp(imu_data_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) return false;
+    if (now - last_joint_ > max_age ||
+        !FreshStamp(joint_state_data_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+      return fail("joint feedback missing, stale or source timestamp expired");
+    }
+    if (now - last_imu_ > max_age ||
+        !FreshStamp(imu_data_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+      return fail("IMU feedback missing, stale or source timestamp expired");
+    }
     for (int i = 0; i < kJoints; ++i) {
       out.joint_pos[i] = joint_state_data_.position[i];
       out.joint_vel[i] = joint_state_data_.velocity[i];
@@ -313,42 +498,88 @@ bool DanceController::ReadSnapshot(Snapshot& out) const {
     out.base_ang_vel = Eigen::Vector3f(imu_data_.angular_velocity.x,
                                        imu_data_.angular_velocity.y,
                                        imu_data_.angular_velocity.z);
+    if (use_odometry_) {
+      bool synchronized = false;
+      // A new odometry sample may arrive just before its bracketing joint
+      // sample. Keep using the newest complete, still-fresh pair in that gap;
+      // arrival order must not reset the four-second readiness hold every time.
+      for (size_t age = 0; age < odometry_count_; ++age) {
+        const auto& candidate = body_odometry_history_[
+            (odometry_next_ + kOdometryHistoryCapacity - 1 - age) % kOdometryHistoryCapacity];
+        if (now - candidate.received > max_age ||
+            !FreshStamp(candidate.stamp, sensor_timeout_ms_, use_sim_handles_)) continue;
+        if (waist_history_.SampleAt(StampNs(candidate.stamp), waist)) {
+          odometry = candidate;
+          synchronized = true;
+          break;
+        }
+      }
+      if (!synchronized) {
+        return fail("waist joint samples do not bracket odometry source time within a 10 ms interval");
+      }
+    }
   }
-  {
-    std::shared_lock<std::shared_mutex> lock(pose_mutex_);
-    if (now - last_pose_ > max_age ||
-        !FreshStamp(anchor_pose_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) return false;
-    out.anchor_pos = Eigen::Vector3f(anchor_pose_.transform.translation.x,
-                                      anchor_pose_.transform.translation.y,
-                                      anchor_pose_.transform.translation.z);
-    out.anchor_quat = ToQuat(anchor_pose_.transform.rotation);
-  }
-  {
-    std::shared_lock<std::shared_mutex> lock(velocity_mutex_);
-    if (now - last_velocity_ > max_age ||
-        !FreshStamp(base_velocity_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) return false;
-    out.base_lin_vel = Eigen::Vector3f(base_velocity_.twist.linear.x,
-                                        base_velocity_.twist.linear.y,
-                                        base_velocity_.twist.linear.z);
+  if (odometry_lock.owns_lock()) odometry_lock.unlock();
+  if (use_odometry_) {
+    DanceAnchorState anchor;
+    if (!ComputeX1DanceAnchor(odometry.position, odometry.orientation, waist, anchor)) {
+      return fail("body odometry / waist FK produced an invalid anchor");
+    }
+    out.anchor_pos = Eigen::Vector3f(anchor.position[0], anchor.position[1], anchor.position[2]);
+    out.anchor_quat = Eigen::Quaternionf(anchor.orientation[0], anchor.orientation[1],
+                                         anchor.orientation[2], anchor.orientation[3]);
+    out.base_lin_vel = odometry.linear_velocity;
+  } else {
+    {
+      std::shared_lock<std::shared_mutex> lock(pose_mutex_);
+      if (now - last_pose_ > max_age ||
+          !FreshStamp(anchor_pose_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+        return fail("/dance/anchor_pose missing, stale or source timestamp expired");
+      }
+      out.anchor_pos = Eigen::Vector3f(anchor_pose_.transform.translation.x,
+                                        anchor_pose_.transform.translation.y,
+                                        anchor_pose_.transform.translation.z);
+      out.anchor_quat = ToQuat(anchor_pose_.transform.rotation);
+    }
+    {
+      std::shared_lock<std::shared_mutex> lock(velocity_mutex_);
+      if (now - last_velocity_ > max_age ||
+          !FreshStamp(base_velocity_.header.stamp, sensor_timeout_ms_, use_sim_handles_)) {
+        return fail("/dance/base_velocity missing, stale or source timestamp expired");
+      }
+      out.base_lin_vel = Eigen::Vector3f(base_velocity_.twist.linear.x,
+                                          base_velocity_.twist.linear.y,
+                                          base_velocity_.twist.linear.z);
+    }
   }
   if (!ValidQuat(out.base_quat) || !ValidQuat(out.anchor_quat) ||
       !out.base_lin_vel.allFinite() || !out.base_ang_vel.allFinite() ||
-      !out.anchor_pos.allFinite()) return false;
+      !out.anchor_pos.allFinite()) return fail("invalid body / anchor state values");
   out.base_quat.normalize();
   out.anchor_quat.normalize();
   return true;
 }
 
-bool DanceController::Ready() const {
+bool DanceController::Ready(const char** reason) const {
+  if (reason) *reason = "feedback ready; waiting for the continuous readiness hold";
+  const auto fail = [reason](const char* message) {
+    if (reason) *reason = message;
+    return false;
+  };
   Snapshot snapshot;
-  if (!ReadSnapshot(snapshot) || motion_.empty()) return false;
-  if (snapshot.base_lin_vel.norm() > max_start_speed_) return false;
+  if (!ReadSnapshot(snapshot, reason)) return false;
+  if (motion_.empty()) return fail("dance reference motion is empty");
+  if (snapshot.base_lin_vel.norm() > max_start_speed_) return fail("body linear speed exceeds max_start_speed");
   const float up = (snapshot.base_quat * Eigen::Vector3f::UnitZ()).z();
-  if (std::acos(std::clamp(up, -1.0f, 1.0f)) * kRadToDeg > max_tilt_deg_) return false;
+  if (std::acos(std::clamp(up, -1.0f, 1.0f)) * kRadToDeg > max_tilt_deg_) return fail("body tilt exceeds max_tilt_deg");
   for (int i = 0; i < kJoints; ++i) {
-    if (std::abs(snapshot.joint_pos[i] - preparation_pos_[i]) > max_start_pose_error_ ||
-        snapshot.joint_pos[i] < joint_conf_.pos_limit_lower(i) - joint_limit_tolerance_ ||
-        snapshot.joint_pos[i] > joint_conf_.pos_limit_upper(i) + joint_limit_tolerance_) return false;
+    if (std::abs(snapshot.joint_pos[i] - preparation_pos_[i]) > max_start_pose_error_) {
+      return fail("a measured joint has not reached the preparation pose (max_start_pose_error)");
+    }
+    if (snapshot.joint_pos[i] < joint_conf_.pos_limit_lower(i) - joint_limit_tolerance_ ||
+        snapshot.joint_pos[i] > joint_conf_.pos_limit_upper(i) + joint_limit_tolerance_) {
+      return fail("a measured joint is outside its position limits");
+    }
   }
   return true;
 }

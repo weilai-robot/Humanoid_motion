@@ -210,6 +210,19 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
         joint_cmd_index_map_[joint_list[ii]] = ii;
       }
       joint_offset_map_ = cfg_node["joint_offset"].as<std::map<std::string, double>>();
+      if (dance_controller != controller_map_.end()) {
+        const auto dance = std::dynamic_pointer_cast<DanceController>(dance_controller->second);
+        if (dance->UsesProprioceptiveEstimator()) {
+          const auto topic = cfg_node["sub_dance_odometry_name"].as<std::string>();
+          dance_odometry_pub_ = core_.GetChannelHandle().GetPublisher(topic);
+          AIMRT_CHECK_ERROR_THROW(aimrt::channel::RegisterPublishType<nav_msgs::msg::Odometry>(dance_odometry_pub_),
+                                  "Register dance estimated odometry failed");
+          dance->SetEstimatedOdometryCallback([this](const nav_msgs::msg::Odometry& odometry) {
+            aimrt::channel::Publish<nav_msgs::msg::Odometry>(dance_odometry_pub_, odometry);
+          });
+          AIMRT_INFO("Dance state: onboard IMU/leg estimator; publishes {}; calibration requires stationary loaded feet", topic);
+        }
+      }
       // printf("joint_cmd_index_map_: ");
       // for (const auto& pair : joint_cmd_index_map_) {
       //   printf("%s: %d, ", pair.first.c_str(), pair.second);
@@ -272,18 +285,31 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       const auto dance_it = controller_map_.find("dance_x1");
       if (dance_it != controller_map_.end()) {
         const auto dance = std::dynamic_pointer_cast<DanceController>(dance_it->second);
-        subs_.push_back(core_.GetChannelHandle().GetSubscriber(
-            cfg_node["sub_dance_anchor_name"].as<std::string>()));
-        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TransformStamped>(
-            subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TransformStamped>& msg) {
-              dance->SetAnchorPose(*msg);
-            });
-        subs_.push_back(core_.GetChannelHandle().GetSubscriber(
-            cfg_node["sub_dance_base_velocity_name"].as<std::string>()));
-        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TwistStamped>(
-            subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TwistStamped>& msg) {
-              dance->SetBaseVelocity(*msg);
-            });
+        if (dance->UsesProprioceptiveEstimator()) {
+          // The controller receives the estimate directly; publishing is only
+          // for inspection. Do not subscribe to our own or an external estimate.
+        } else if (dance->UsesOdometry()) {
+          const auto topic = cfg_node["sub_dance_odometry_name"].as<std::string>();
+          subs_.push_back(core_.GetChannelHandle().GetSubscriber(topic));
+          ret &= aimrt::channel::Subscribe<nav_msgs::msg::Odometry>(
+              subs_.back(), [dance](const std::shared_ptr<const nav_msgs::msg::Odometry>& msg) {
+                dance->SetOdometry(*msg);
+              });
+          AIMRT_INFO("Dance state: direct body odometry on {}; C++ source-time waist FK; no Python bridge or anchor TF required", topic);
+        } else {
+          subs_.push_back(core_.GetChannelHandle().GetSubscriber(
+              cfg_node["sub_dance_anchor_name"].as<std::string>()));
+          ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TransformStamped>(
+              subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TransformStamped>& msg) {
+                dance->SetAnchorPose(*msg);
+              });
+          subs_.push_back(core_.GetChannelHandle().GetSubscriber(
+              cfg_node["sub_dance_base_velocity_name"].as<std::string>()));
+          ret &= aimrt::channel::Subscribe<geometry_msgs::msg::TwistStamped>(
+              subs_.back(), [dance](const std::shared_ptr<const geometry_msgs::msg::TwistStamped>& msg) {
+                dance->SetBaseVelocity(*msg);
+              });
+        }
       }
 
       // 电机层指令/反馈（dcu_driver actuator_debug=true 时发布；用于 walk_diag 记录电机侧扭矩）
@@ -390,6 +416,7 @@ void ControlModule::Shutdown() {
 
 void ControlModule::RestartCurrentState() {
   dance_start_gate_.Reset();
+  dance_next_ready_report_ = {};
   dance_zero_ready_logged_ = false;
   dance_stand_ready_logged_ = false;
   for (const auto& name : state_machine_.GetCurrentControllerNames()) {
@@ -449,7 +476,18 @@ bool ControlModule::MainLoop() {
         if (dance_deployment_ && state_machine_.GetCurrentState() == "dance_ready") {
           const auto pose = std::dynamic_pointer_cast<PDController>(controller_map_.at("pd_dance_pose"));
           const auto dance = std::dynamic_pointer_cast<DanceController>(controller_map_.at("dance_x1"));
-          dance_start_gate_.Update(pose->TransitionComplete() && pose->FeedbackReady() && dance->Ready());
+          const char* reason = "moving to the preparation pose";
+          bool ready = false;
+          if (pose->TransitionComplete()) {
+            if (pose->FeedbackReady()) ready = dance->Ready(&reason);
+            else reason = "PD joint / IMU feedback is stale, invalid or tilted";
+          }
+          dance_start_gate_.Update(ready);
+          const auto report_now = std::chrono::steady_clock::now();
+          if (report_now >= dance_next_ready_report_) {
+            AIMRT_INFO("Dance preparation: {}", reason);
+            dance_next_ready_report_ = report_now + std::chrono::seconds(2);
+          }
           if (dance_start_gate_.Ready() && state_machine_.OnEvent("/dance_play")) {
             // Switch before composing any command, then infer frame 0 below.
             // A stop changes state and resets the gate, cancelling this sequence.

@@ -25,6 +25,7 @@ std::filesystem::path SourceDir() {
 YAML::Node Config() {
   const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance.yaml").string());
   auto cfg = YAML::Clone(root["controllers"]["dance_x1"]);
+  cfg["state_source"] = "external_topics";  // Preserve the independent golden external-state fixture.
   cfg["joint_limits"] = root["joint_limits"];
   cfg["control_frequency_hz"] = root["control_frequecy"];
   cfg["model_file"] = (SourceDir() / "policy/dance_x1_v11_4999.bin").string();
@@ -173,6 +174,77 @@ TEST(DanceController, MissingOrOldSourceFeedbackPreventsEntry) {
   EXPECT_TRUE(controller.Faulted());
 }
 
+TEST(DanceController, ProprioceptiveFeedbackPublishesSourceTimedBodyStateWithoutExternalOdometry) {
+  auto cfg = Config();
+  cfg["state_source"] = "proprioceptive";
+  DanceController controller(true);
+  controller.Init(cfg);
+  ASSERT_TRUE(controller.UsesProprioceptiveEstimator());
+  Sample sample(cfg);
+  std::ifstream fixture(SourceDir()/"test/data/dance_x1_estimator_static.csv");
+  std::string line;
+  std::array<double, 59> row{};
+  while (std::getline(fixture, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::replace(line.begin(), line.end(), ',', ' ');
+    std::istringstream stream(line);
+    for (double& v : row) ASSERT_TRUE(bool(stream >> v));
+    break;
+  }
+  ASSERT_GT(row[58], 0.1);
+  sample.imu.orientation.w = row[0]; sample.imu.orientation.x = row[1];
+  sample.imu.orientation.y = row[2]; sample.imu.orientation.z = row[3];
+  sample.imu.linear_acceleration.z = 9.81;
+  for (size_t i = 0; i < 12; ++i) {
+    const size_t j = sample.index.at(kDanceLegJointNames[i]);
+    sample.joint.position[j] = row[10+i]; sample.joint.velocity[j] = 0;
+    sample.joint.effort[j] = row[34+i];
+  }
+  int count = 0;
+  nav_msgs::msg::Odometry last;
+  controller.SetEstimatedOdometryCallback([&](const nav_msgs::msg::Odometry& value) {
+    const auto ns = [](const builtin_interfaces::msg::Time& stamp) {
+      return int64_t(stamp.sec)*1000000000LL+stamp.nanosec;
+    };
+    EXPECT_GT(ns(value.header.stamp), ns(last.header.stamp));
+    last = value; ++count;
+  });
+  for (int i = 1; i <= 1000; ++i) {
+    sample.joint.header.stamp.sec = 1+i/1000;
+    sample.joint.header.stamp.nanosec = (i%1000)*1000000;
+    sample.imu.header.stamp = sample.joint.header.stamp;
+    if (i%2) {
+      controller.SetImuData(sample.imu);
+      controller.SetJointStateData(sample.joint, sample.index);
+    } else {
+      controller.SetJointStateData(sample.joint, sample.index);
+      controller.SetImuData(sample.imu);
+    }
+    if (i < 500) EXPECT_FALSE(controller.Ready());
+  }
+  EXPECT_TRUE(controller.Ready());
+  EXPECT_GT(count, 10);
+  EXPECT_LE(count, 50);
+  EXPECT_EQ(last.header.frame_id, "odom"); EXPECT_EQ(last.child_frame_id, "base_link");
+  EXPECT_NEAR(last.pose.pose.position.z, row[58], 0.002);
+  EXPECT_NEAR(last.twist.twist.linear.x, 0, 1e-7);
+  EXPECT_NEAR(last.twist.twist.linear.y, 0, 1e-7);
+  EXPECT_GT(last.pose.covariance[0], 0);
+  std::this_thread::sleep_for(std::chrono::milliseconds(90));
+  controller.SetImuData(sample.imu);  // frozen source cannot keep the estimate alive
+  controller.SetJointStateData(sample.joint, sample.index);
+  EXPECT_FALSE(controller.Ready());
+}
+
+TEST(DanceController, ProprioceptiveEstimatorRejectsInvalidContactConfiguration) {
+  auto cfg = Config();
+  cfg["state_source"] = "proprioceptive";
+  cfg["state_estimator"]["contact_on_force"] = 10.;
+  cfg["state_estimator"]["contact_off_force"] = 20.;
+  DanceController controller(true);
+  EXPECT_THROW(controller.Init(cfg), std::runtime_error);
+}
+
 TEST(DanceController, RejectsRepeatedSourceStampsInSimulationToo) {
   const auto cfg = Config();
   DanceController controller(true);
@@ -196,6 +268,13 @@ TEST(DanceController, RejectsWrongRateOldSettlePhaseAndJointOrder) {
   cfg["start_pose"] = "unknown";
   EXPECT_THROW(DanceController(false).Init(cfg), std::runtime_error);
   cfg = Config();
+  cfg["state_source"] = "unknown";
+  EXPECT_THROW(DanceController(false).Init(cfg), std::runtime_error);
+  cfg = Config();
+  cfg["state_source"] = "odometry";
+  cfg["base_frame"] = "base_footprint";
+  EXPECT_THROW(DanceController(false).Init(cfg), std::runtime_error);
+  cfg = Config();
   cfg["joint_list"][0] = "lumbar_yaw_joint";
   cfg["joint_list"][1] = "left_hip_pitch_joint";
   EXPECT_THROW(DanceController(false).Init(cfg), std::runtime_error);
@@ -209,6 +288,175 @@ TEST(DanceController, GuideRejectsAnUnpreparedJointPose) {
   sample.joint.position[sample.index.at("left_elbow_pitch_joint")] = 1.0;
   sample.Send(controller);
   EXPECT_FALSE(controller.Ready());
+}
+
+nav_msgs::msg::Odometry BodyOdometry(const Sample& sample) {
+  nav_msgs::msg::Odometry odometry;
+  odometry.header.stamp = sample.joint.header.stamp;
+  odometry.header.frame_id = "odom";
+  odometry.child_frame_id = "base_link";
+  odometry.pose.pose.position.z = 0.8;
+  odometry.pose.pose.orientation.w = 1;
+  return odometry;
+}
+
+builtin_interfaces::msg::Time ShiftStamp(builtin_interfaces::msg::Time stamp, int64_t offset_ns) {
+  const int64_t ns = static_cast<int64_t>(stamp.sec) * 1000000000LL + stamp.nanosec + offset_ns;
+  stamp.sec = ns / 1000000000LL;
+  stamp.nanosec = ns % 1000000000LL;
+  return stamp;
+}
+
+TEST(DanceController, DirectOdometryNeedsNoPythonBridgeAndRejectsNavigationFrames) {
+  auto cfg = Config();
+  cfg["state_source"] = "odometry";
+  DanceController controller(false);
+  controller.Init(cfg);
+  ASSERT_TRUE(controller.UsesOdometry());
+  Sample sample(cfg);
+  sample.Send(controller);  // Legacy anchor/velocity topics must not satisfy native mode.
+  const char* reason = nullptr;
+  EXPECT_FALSE(controller.Ready(&reason));
+  ASSERT_NE(reason, nullptr);
+  EXPECT_NE(std::string(reason).find("no accepted body odometry"), std::string::npos);
+  auto odometry = BodyOdometry(sample);
+  odometry.child_frame_id = "base_footprint";
+  controller.SetOdometry(odometry);
+  EXPECT_FALSE(controller.Ready(&reason));
+  EXPECT_NE(std::string(reason).find("frames mismatch"), std::string::npos);
+  odometry.child_frame_id = "base_link";
+  controller.SetOdometry(odometry);
+  ASSERT_TRUE(controller.Ready(&reason)) << reason;
+  controller.RestartController();
+  controller.Update();
+  EXPECT_FALSE(controller.Faulted()) << controller.FaultReason();
+}
+
+TEST(DanceController, DirectOdometryMatchesIndependentExternalAnchorInference) {
+  auto cfg = Config();
+  DanceController external(false);
+  external.Init(cfg);
+  cfg["state_source"] = "odometry";
+  DanceController native(false);
+  native.Init(cfg);
+  Sample sample(cfg);
+  // Use the first independent MuJoCo fixture (zero waist, base [0,0,.8]).
+  std::ifstream fixture(SourceDir() / "test/data/dance_x1_waist_fk.csv");
+  std::string line;
+  do {
+    ASSERT_TRUE(bool(std::getline(fixture, line)));
+  } while (line.empty() || line[0] == '#' || line.starts_with("base_x"));
+  std::replace(line.begin(), line.end(), ',', ' ');
+  std::istringstream values(line);
+  std::array<double, 17> row{};
+  for (double& value : row) ASSERT_TRUE(bool(values >> value));
+  sample.anchor.transform.translation.x = row[10];
+  sample.anchor.transform.translation.y = row[11];
+  sample.anchor.transform.translation.z = row[12];
+  sample.anchor.transform.rotation.w = row[13];
+  sample.anchor.transform.rotation.x = row[14];
+  sample.anchor.transform.rotation.y = row[15];
+  sample.anchor.transform.rotation.z = row[16];
+  sample.Send(external);
+  sample.Send(native);
+  native.SetOdometry(BodyOdometry(sample));
+  ASSERT_TRUE(external.Ready());
+  ASSERT_TRUE(native.Ready());
+  external.RestartController();
+  native.RestartController();
+  external.Update();
+  native.Update();
+  ASSERT_FALSE(external.Faulted());
+  ASSERT_FALSE(native.Faulted());
+  const auto expected = external.GetJointCmdData();
+  const auto actual = native.GetJointCmdData();
+  ASSERT_EQ(actual.name, expected.name);
+  for (size_t i = 0; i < actual.name.size(); ++i) {
+    EXPECT_NEAR(actual.position[i], expected.position[i], 1e-5) << actual.name[i];
+    EXPECT_NEAR(actual.effort[i], expected.effort[i], 1e-3) << actual.name[i];
+  }
+}
+
+TEST(DanceController, DirectOdometryWaitsForBracketingJointFeedback) {
+  auto cfg = Config();
+  cfg["state_source"] = "odometry";
+  DanceController controller(false);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  auto odometry = BodyOdometry(sample);
+  odometry.header.stamp = ShiftStamp(odometry.header.stamp, 500000);
+  controller.SetOdometry(odometry);
+  const char* reason = nullptr;
+  EXPECT_FALSE(controller.Ready(&reason));
+  EXPECT_NE(std::string(reason).find("bracket odometry source time"), std::string::npos);
+  sample.joint.header.stamp = ShiftStamp(sample.joint.header.stamp, 1000000);
+  sample.imu.header.stamp = sample.joint.header.stamp;
+  sample.Send(controller);
+  EXPECT_TRUE(controller.Ready(&reason)) << reason;
+}
+
+TEST(DanceController, DirectOdometryRejectsFrozenEstimatorEvenWithFreshJointsAndImu) {
+  auto cfg = Config();
+  cfg["state_source"] = "odometry";
+  DanceController controller(true);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  const auto odometry = BodyOdometry(sample);
+  controller.SetOdometry(odometry);
+  ASSERT_TRUE(controller.Ready());
+  controller.RestartController();
+  std::this_thread::sleep_for(std::chrono::milliseconds(90));
+  sample.Stamp();
+  sample.Send(controller);
+  controller.SetOdometry(odometry);  // Replays must not refresh the estimator receipt time.
+  EXPECT_FALSE(controller.Ready());
+  controller.Update();
+  EXPECT_TRUE(controller.Faulted());
+}
+
+TEST(DanceController, NewOdometryBeforeItsJointSampleDoesNotResetReadiness) {
+  auto cfg = Config();
+  cfg["state_source"] = "odometry";
+  DanceController controller(false);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  auto odometry = BodyOdometry(sample);
+  controller.SetOdometry(odometry);
+  ASSERT_TRUE(controller.Ready());
+  odometry.header.stamp = ShiftStamp(odometry.header.stamp, 500000);
+  controller.SetOdometry(odometry);
+  EXPECT_TRUE(controller.Ready());  // Previous synchronized pair is still valid.
+  sample.joint.header.stamp = ShiftStamp(sample.joint.header.stamp, 1000000);
+  sample.imu.header.stamp = sample.joint.header.stamp;
+  sample.Send(controller);
+  EXPECT_TRUE(controller.Ready());  // New pair becomes available without a false gap.
+}
+
+TEST(DanceController, DirectOdometryRejectsStaleInvalidAndExcessiveSpeedInputs) {
+  auto cfg = Config();
+  cfg["state_source"] = "odometry";
+  DanceController controller(false);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  const auto valid = BodyOdometry(sample);
+  auto invalid = valid;
+  --invalid.header.stamp.sec;
+  controller.SetOdometry(invalid);
+  EXPECT_FALSE(controller.Ready());
+  invalid = valid;
+  invalid.pose.pose.orientation.w = 0;
+  controller.SetOdometry(invalid);
+  EXPECT_FALSE(controller.Ready());
+  invalid = valid;
+  invalid.twist.twist.linear.x = 1;
+  controller.SetOdometry(invalid);
+  const char* reason = nullptr;
+  EXPECT_FALSE(controller.Ready(&reason));
+  EXPECT_NE(std::string(reason).find("max_start_speed"), std::string::npos);
 }
 
 TEST(DanceController, DefaultPreparationDoesNotRequireTheDynamicFirstFramePose) {

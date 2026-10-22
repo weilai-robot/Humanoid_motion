@@ -39,6 +39,7 @@ target_link_directories(
 find_package(std_msgs)
 find_package(sensor_msgs)
 find_package(geometry_msgs)
+find_package(nav_msgs REQUIRED)
 find_package(Threads REQUIRED)
 target_link_libraries(
   ${CUR_TARGET_NAME}
@@ -63,6 +64,10 @@ target_link_libraries(
          geometry_msgs::geometry_msgs__rosidl_typesupport_cpp
          geometry_msgs::geometry_msgs__rosidl_typesupport_fastrtps_cpp
          geometry_msgs::geometry_msgs__rosidl_typesupport_introspection_cpp
+         nav_msgs::nav_msgs__rosidl_generator_cpp
+         nav_msgs::nav_msgs__rosidl_typesupport_cpp
+         nav_msgs::nav_msgs__rosidl_typesupport_fastrtps_cpp
+         nav_msgs::nav_msgs__rosidl_typesupport_introspection_cpp
          Threads::Threads
          onnxruntime
          ruckig)
@@ -70,6 +75,16 @@ target_link_libraries(
 # Set test of target
 if(XYBER_X1_INFER_BUILD_TESTS AND test_files)
   add_gtest_target(TEST_TARGET ${CUR_TARGET_NAME} TEST_SRC ${test_files})
+endif()
+if(XYBER_X1_INFER_BUILD_TESTS)
+  set(DANCE_STATE_CHECK_TARGET ${CUR_TARGET_NAME}_dance_state_adapter_check)
+  add_executable(${DANCE_STATE_CHECK_TARGET} test/dance_state_adapter_check.cc)
+  target_include_directories(${DANCE_STATE_CHECK_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME ${DANCE_STATE_CHECK_TARGET} COMMAND ${DANCE_STATE_CHECK_TARGET})
+  set(DANCE_ESTIMATOR_CHECK_TARGET ${CUR_TARGET_NAME}_dance_state_estimator_check)
+  add_executable(${DANCE_ESTIMATOR_CHECK_TARGET} test/dance_state_estimator_check.cc)
+  target_include_directories(${DANCE_ESTIMATOR_CHECK_TARGET} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  add_test(NAME ${DANCE_ESTIMATOR_CHECK_TARGET} COMMAND ${DANCE_ESTIMATOR_CHECK_TARGET})
 endif()
 
 # Install config files
