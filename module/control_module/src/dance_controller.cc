@@ -71,7 +71,6 @@ void DanceController::Init(const YAML::Node& cfg) {
   max_tilt_deg_ = cfg["max_tilt_deg"].as<float>();
   max_start_speed_ = cfg["max_start_speed"].as<float>();
   max_start_pose_error_ = cfg["max_start_pose_error"].as<float>();
-  max_tracking_error_ = cfg["max_tracking_error"].as<float>();
   max_anchor_error_ = cfg["max_anchor_error"].as<float>();
   joint_limit_margin_ = cfg["joint_limit_margin"].as<float>();
   joint_limit_tolerance_ = cfg["joint_limit_tolerance"].as<float>();
@@ -135,10 +134,10 @@ void DanceController::Init(const YAML::Node& cfg) {
   if (control_hz != 1000 || decimation_ != 20 || prepare_ticks != 0 ||
       sensor_timeout_ms_ <= 0 || sensor_timeout_ms_ > 80 ||
       !Finite(max_tilt_deg_) || !Finite(max_start_speed_) || !Finite(max_start_pose_error_) ||
-      !Finite(max_tracking_error_) || !Finite(joint_limit_tolerance_) ||
+      !Finite(joint_limit_tolerance_) ||
       !Finite(max_anchor_error_) || !Finite(joint_limit_margin_) ||
       max_tilt_deg_ <= 0 || max_tilt_deg_ >= 90 || max_start_speed_ <= 0 ||
-      max_start_pose_error_ <= 0 || max_tracking_error_ < 0 ||
+      max_start_pose_error_ <= 0 ||
       max_anchor_error_ <= 0 || joint_limit_margin_ < 0 ||
       joint_limit_tolerance_ < 0 || joint_limit_tolerance_ > 0.05f) {
     throw std::runtime_error("invalid dance control timing or safety limits");
@@ -695,15 +694,8 @@ void DanceController::Update() {
     SetFault("dance base tilt exceeded limit");
     return;
   }
-  for (int i = 0; i < kJoints; ++i) {
-    if ((max_tracking_error_ > 0 &&
-         std::abs(snapshot.joint_pos[i] - target_pos_[i]) > max_tracking_error_) ||
-        snapshot.joint_pos[i] < joint_conf_.pos_limit_lower(i) - joint_limit_tolerance_ ||
-        snapshot.joint_pos[i] > joint_conf_.pos_limit_upper(i) + joint_limit_tolerance_) {
-      SetFault("dance joint tracking error or limit exceeded");
-      return;
-    }
-  }
+  // Measured joint excursions and instantaneous PD error do not abort playback.
+  // Policy position targets remain bounded by ClipTarget; Ready checks entry limits.
   const auto& reference = motion_[frame_index_ == 0 ? 0 : frame_index_ - 1];
   const Eigen::Vector3f expected_anchor = reference_alignment_pos_ +
       reference_alignment_quat_ * reference.anchor_pos;

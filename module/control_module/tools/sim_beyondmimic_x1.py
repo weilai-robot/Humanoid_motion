@@ -322,15 +322,12 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
         tilt = float(np.degrees(np.arccos(np.clip(math.quat_to_rotmat(data.qpos[3:7])[2, 2], -1, 1))))
         tilts.append(tilt)
         violation = float(np.max(np.maximum(lower - q, q - upper)))
+        # Record measured excursions/PD error without aborting playback, as in C++.
         max_limit_violation = max(max_limit_violation, violation)
         error = float(np.max(np.abs(q - target)))
         max_target_error = max(max_target_error, error)
         if tilt > conf["max_tilt_deg"]:
             fault = "tilt"
-        elif violation > conf["joint_limit_tolerance"]:
-            fault = "measured joint limit"
-        elif conf["max_tracking_error"] > 0 and error > conf["max_tracking_error"]:
-            fault = "target tracking error"
         elif tick and np.linalg.norm(translation + math.quat_rotate(alignment, ref_pos[max(0, frame_count - 1)]) - anchor_position) > conf["max_anchor_error"]:
             fault = "anchor tracking error"
         if fault:

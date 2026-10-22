@@ -150,7 +150,6 @@ class DanceController final : public ControllerBase {
   float max_tilt_deg_{35.0f};
   float max_start_speed_{0.2f};
   float max_start_pose_error_{0.12f};
-  float max_tracking_error_{0.0f};
   float max_anchor_error_{0.6f};
   float joint_limit_margin_{0.0f};
   float joint_limit_tolerance_{0.01f};

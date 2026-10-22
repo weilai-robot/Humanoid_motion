@@ -386,11 +386,10 @@ controllers:
     max_start_speed: 0.2
     start_pose: default_q   # 准备位使用训练默认姿态；策略播放仍从参考帧 0 开始
     max_start_pose_error: 0.12  # Guide 检查实测角度已接近 default_q
-    # 与 AMP 一致，不按 q_target-q_measured 瞬时差判故障；策略正常会产生 >0.8rad 的 PD 误差。
-    max_tracking_error: 0.0
     max_anchor_error: 0.6
+    # 播放阶段不因实测关节越限或瞬时跟踪误差退出；输出目标仍按 joint_limits 裁剪。
     joint_limit_margin: 0.0
-    joint_limit_tolerance: 0.01  # 实测角度容差；目标仍严格裁到 joint_limits 内
+    joint_limit_tolerance: 0.01  # 仅用于启动前的实测关节限位检查
     # DCU already converts lumbar pitch into training coordinates (fb8cc78).
     # All 29 policy joints therefore use +1, including lumbar_pitch_joint.
     joint_sign: {}

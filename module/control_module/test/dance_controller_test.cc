@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -154,6 +155,62 @@ TEST(DanceController, HoldsPositionFor20TicksButUpdatesAnkleTorque) {
     const auto ankle = std::find(cmd.name.begin(), cmd.name.end(), "left_ankle_pitch_joint") - cmd.name.begin();
     EXPECT_NE(cmd.effort[ankle], first.effort[ankle]);
   }
+}
+
+TEST(DanceController, PlaybackIgnoresLegacyTrackingThresholdAndMeasuredJointExcursions) {
+  auto cfg = Config();
+  // Older installed YAML may still contain this retired setting.
+  cfg["max_tracking_error"] = 1e-6;
+  DanceController controller(true);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  ASSERT_TRUE(controller.Ready());
+  controller.RestartController();
+  controller.Update();
+  ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+
+  const double excursion = cfg["joint_limit_tolerance"].as<double>() + 0.01;
+  sample.joint.position[sample.index.at("left_hip_roll_joint")] =
+      cfg["joint_limits"]["left_hip_roll_joint"]["upper"].as<double>() + excursion;
+  sample.joint.position[sample.index.at("right_hip_roll_joint")] =
+      cfg["joint_limits"]["right_hip_roll_joint"]["lower"].as<double>() - excursion;
+  // Exercise held targets and two subsequent policy inferences with both
+  // upper/lower measured limit excursions and finite, fresh feedback.
+  for (int tick = 1; tick <= 40; ++tick) {
+    sample.Stamp();
+    sample.Send(controller);
+    controller.Update();
+    ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+    EXPECT_FALSE(controller.Finished());
+    const auto cmd = controller.GetJointCmdData();
+    for (size_t i = 0; i < cmd.name.size(); ++i) {
+      const auto limit = cfg["joint_limits"][cmd.name[i]];
+      EXPECT_TRUE(std::isfinite(cmd.position[i])) << cmd.name[i];
+      EXPECT_TRUE(std::isfinite(cmd.effort[i])) << cmd.name[i];
+      EXPECT_GE(cmd.position[i], limit["lower"].as<double>() - 1e-6) << cmd.name[i];
+      EXPECT_LE(cmd.position[i], limit["upper"].as<double>() + 1e-6) << cmd.name[i];
+    }
+  }
+}
+
+TEST(DanceController, MeasuredJointLimitsStillPreventEntry) {
+  auto cfg = Config();
+  cfg["max_start_pose_error"] = 0.5;  // Isolate the entry limit check from pose readiness.
+  DanceController controller(true);
+  controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  ASSERT_TRUE(controller.Ready());
+  sample.joint.position[sample.index.at("left_hip_roll_joint")] =
+      cfg["joint_limits"]["left_hip_roll_joint"]["upper"].as<double>() +
+      cfg["joint_limit_tolerance"].as<double>() + 0.01;
+  sample.Stamp();
+  sample.Send(controller);
+  const char* reason = nullptr;
+  EXPECT_FALSE(controller.Ready(&reason));
+  ASSERT_NE(reason, nullptr);
+  EXPECT_EQ(std::string(reason), "a measured joint is outside its position limits");
 }
 
 TEST(DanceController, MissingOrOldSourceFeedbackPreventsEntry) {
