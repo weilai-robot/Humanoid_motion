@@ -386,7 +386,7 @@ controllers:
     max_start_speed: 0.2
     start_pose: default_q   # 准备位使用训练默认姿态；策略播放仍从参考帧 0 开始
     max_start_pose_error: 0.12  # Guide 检查实测角度已接近 default_q
-    max_anchor_error: 0.6
+    # 锚点位置偏差继续输入 policy，不再按偏差大小中止播放。
     # 播放阶段不因实测关节越限或瞬时跟踪误差退出；输出目标仍按 joint_limits 裁剪。
     joint_limit_margin: 0.0
     joint_limit_tolerance: 0.01  # 仅用于启动前的实测关节限位检查

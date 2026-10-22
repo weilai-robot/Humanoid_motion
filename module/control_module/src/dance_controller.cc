@@ -71,7 +71,6 @@ void DanceController::Init(const YAML::Node& cfg) {
   max_tilt_deg_ = cfg["max_tilt_deg"].as<float>();
   max_start_speed_ = cfg["max_start_speed"].as<float>();
   max_start_pose_error_ = cfg["max_start_pose_error"].as<float>();
-  max_anchor_error_ = cfg["max_anchor_error"].as<float>();
   joint_limit_margin_ = cfg["joint_limit_margin"].as<float>();
   joint_limit_tolerance_ = cfg["joint_limit_tolerance"].as<float>();
   odom_frame_ = cfg["odom_frame"].as<std::string>();
@@ -134,11 +133,9 @@ void DanceController::Init(const YAML::Node& cfg) {
   if (control_hz != 1000 || decimation_ != 20 || prepare_ticks != 0 ||
       sensor_timeout_ms_ <= 0 || sensor_timeout_ms_ > 80 ||
       !Finite(max_tilt_deg_) || !Finite(max_start_speed_) || !Finite(max_start_pose_error_) ||
-      !Finite(joint_limit_tolerance_) ||
-      !Finite(max_anchor_error_) || !Finite(joint_limit_margin_) ||
+      !Finite(joint_limit_tolerance_) || !Finite(joint_limit_margin_) ||
       max_tilt_deg_ <= 0 || max_tilt_deg_ >= 90 || max_start_speed_ <= 0 ||
-      max_start_pose_error_ <= 0 ||
-      max_anchor_error_ <= 0 || joint_limit_margin_ < 0 ||
+      max_start_pose_error_ <= 0 || joint_limit_margin_ < 0 ||
       joint_limit_tolerance_ < 0 || joint_limit_tolerance_ > 0.05f) {
     throw std::runtime_error("invalid dance control timing or safety limits");
   }
@@ -696,14 +693,7 @@ void DanceController::Update() {
   }
   // Measured joint excursions and instantaneous PD error do not abort playback.
   // Policy position targets remain bounded by ClipTarget; Ready checks entry limits.
-  const auto& reference = motion_[frame_index_ == 0 ? 0 : frame_index_ - 1];
-  const Eigen::Vector3f expected_anchor = reference_alignment_pos_ +
-      reference_alignment_quat_ * reference.anchor_pos;
-  if (tick_ > 0 &&
-      (expected_anchor - snapshot.anchor_pos).norm() > max_anchor_error_) {
-    SetFault("dance anchor tracking error exceeded limit");
-    return;
-  }
+  // Anchor position error remains a policy observation, without an abort threshold.
   current_ = snapshot;
   // Guide hands over from the separately held dance pose with no settle phase;
   // target positions are held for 20 ticks, ankle PD is recomputed every tick.

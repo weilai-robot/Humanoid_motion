@@ -194,6 +194,54 @@ TEST(DanceController, PlaybackIgnoresLegacyTrackingThresholdAndMeasuredJointExcu
   }
 }
 
+TEST(DanceController, PlaybackContinuesAcrossAnchorExcursionsWithoutRealigningReference) {
+  auto cfg = Config();
+  cfg["max_anchor_error"] = 0.6;  // Retired settings in older installed YAML are ignored.
+  DanceController baseline(true);
+  DanceController displaced(true);
+  baseline.Init(cfg);
+  displaced.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(baseline);
+  sample.Send(displaced);
+  ASSERT_TRUE(baseline.Ready());
+  ASSERT_TRUE(displaced.Ready());
+  baseline.RestartController();
+  displaced.RestartController();
+  baseline.Update();
+  displaced.Update();
+  ASSERT_FALSE(baseline.Faulted()) << baseline.FaultReason();
+  ASSERT_FALSE(displaced.Faulted()) << displaced.FaultReason();
+
+  for (int tick = 1; tick <= 20; ++tick) {
+    sample.Stamp();
+    sample.Send(baseline);
+    Sample offset = sample;
+    offset.anchor.transform.translation.x += 0.65;
+    offset.Send(displaced);
+    baseline.Update();
+    displaced.Update();
+    ASSERT_FALSE(baseline.Faulted()) << baseline.FaultReason();
+    ASSERT_FALSE(displaced.Faulted()) << displaced.FaultReason();
+    EXPECT_FALSE(displaced.Finished());
+  }
+  // The actor must still receive the error and respond to it at the next
+  // inference, rather than hiding the displacement by realigning the reference.
+  const auto expected = baseline.GetJointCmdData();
+  const auto actual = displaced.GetJointCmdData();
+  bool changed = false;
+  for (size_t i = 0; i < actual.name.size(); ++i) {
+    changed = changed || std::abs(actual.position[i] - expected.position[i]) > 1e-5 ||
+                        std::abs(actual.effort[i] - expected.effort[i]) > 1e-5;
+    const auto limit = cfg["joint_limits"][actual.name[i]];
+    EXPECT_TRUE(std::isfinite(actual.position[i])) << actual.name[i];
+    EXPECT_TRUE(std::isfinite(actual.effort[i])) << actual.name[i];
+    EXPECT_GE(actual.position[i], limit["lower"].as<double>() - 1e-6) << actual.name[i];
+    EXPECT_LE(actual.position[i], limit["upper"].as<double>() + 1e-6) << actual.name[i];
+  }
+  EXPECT_TRUE(changed);
+}
+
 TEST(DanceController, MeasuredJointLimitsStillPreventEntry) {
   auto cfg = Config();
   cfg["max_start_pose_error"] = 0.5;  // Isolate the entry limit check from pose readiness.

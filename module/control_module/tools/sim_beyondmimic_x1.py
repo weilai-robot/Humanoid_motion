@@ -328,8 +328,6 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
         max_target_error = max(max_target_error, error)
         if tilt > conf["max_tilt_deg"]:
             fault = "tilt"
-        elif tick and np.linalg.norm(translation + math.quat_rotate(alignment, ref_pos[max(0, frame_count - 1)]) - anchor_position) > conf["max_anchor_error"]:
-            fault = "anchor tracking error"
         if fault:
             break
         if tick % 20 == 0:
