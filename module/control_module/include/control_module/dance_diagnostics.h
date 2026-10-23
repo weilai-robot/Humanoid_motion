@@ -69,9 +69,11 @@ class DanceDiagnostics {
         std::chrono::steady_clock::now().time_since_epoch()).count();
   }
   bool Start(const std::string& directory, const std::vector<std::string>& joints,
-             int flush_ms = 100, size_t capacity = 256) {
+             int flush_ms = 100, size_t capacity = 256, size_t observation_dim = kObservations) {
     Stop();
-    if (joints.size() != kJoints || flush_ms < 10 || flush_ms > 1000 || capacity < 2) return false;
+    if (joints.size() != kJoints || flush_ms < 10 || flush_ms > 1000 || capacity < 2 ||
+        (observation_dim != 154 && observation_dim != 160)) return false;
+    observation_dim_ = observation_dim;
     try {
       std::filesystem::create_directories(directory);
       Frame stamp; Stamp(stamp);
@@ -80,7 +82,7 @@ class DanceDiagnostics {
       read_.store(0); write_.store(0); dropped_.store(0); sequence_ = 0; io_error_.store(false);
       file_.open(path_, std::ios::out | std::ios::trunc);
       file_ << std::setprecision(17);
-      const auto columns = Columns(joints);
+      const auto columns = Columns(joints, observation_dim_);
       for (size_t i = 0; i < columns.size(); ++i) {
         if (i) file_ << ',';
         Quoted(columns[i]);
@@ -120,12 +122,13 @@ class DanceDiagnostics {
   uint64_t Dropped() const { return dropped_.load(std::memory_order_relaxed); }
   const std::string& Path() const { return path_; }
 
-  static std::vector<std::string> Columns(const std::vector<std::string>& joints) {
+  static std::vector<std::string> Columns(const std::vector<std::string>& joints,
+                                          size_t observation_dim = kObservations) {
     std::vector<std::string> result{
       "schema_version", "wall_ns", "steady_ns", "session", "event", "state", "reason", "state_source",
       "control_tick", "policy_frame", "motion_time_s", "snapshot_valid", "has_observation", "has_action",
       "command_valid", "estimator_valid", "sequence", "dropped_total", "joint_stamp_ns", "imu_stamp_ns",
-      "body_stamp_ns", "anchor_stamp_ns", "velocity_stamp_ns"};
+      "body_stamp_ns", "anchor_stamp_ns", "velocity_stamp_ns", "observation_dim"};
     auto group = [&](std::string_view prefix, const auto& suffixes) {
       for (const auto& suffix : suffixes) result.emplace_back(std::string(prefix)+"_"+suffix);
     };
@@ -142,7 +145,7 @@ class DanceDiagnostics {
     group("est_vertical_force", sides); group("est_contact", sides);
     group("joint_position", joints); group("joint_velocity", joints); group("joint_effort", joints);
     for (const auto prefix : {"obs_raw_", "obs_normalized_"})
-      for (size_t i = 0; i < kObservations; ++i) result.emplace_back(std::string(prefix)+std::to_string(i));
+      for (size_t i = 0; i < observation_dim; ++i) result.emplace_back(std::string(prefix)+std::to_string(i));
     group("action", joints); group("target_policy", joints);
     group("command_position", joints); group("command_effort", joints);
     group("command_kp", joints); group("command_kd", joints);
@@ -156,7 +159,7 @@ class DanceDiagnostics {
     file_ << '"';
   }
   void Row(const Frame& f) {
-    file_ << 1 << ',' << f.wall_ns << ',' << f.steady_ns << ',' << f.session << ',';
+    file_ << 2 << ',' << f.wall_ns << ',' << f.steady_ns << ',' << f.session << ',';
     Quoted(f.event.data()); file_ << ','; Quoted(f.state.data()); file_ << ',';
     Quoted(f.reason.data()); file_ << ','; Quoted(f.state_source.data());
     file_ << ',' << f.tick << ',' << f.policy_frame << ',';
@@ -164,8 +167,12 @@ class DanceDiagnostics {
     file_ << ',' << f.snapshot_valid << ',' << f.has_observation << ',' << f.has_action
           << ',' << f.command_valid << ',' << f.estimator_valid << ',' << f.sequence << ',' << f.dropped
           << ',' << f.joint_stamp_ns << ',' << f.imu_stamp_ns << ',' << f.body_stamp_ns
-          << ',' << f.anchor_stamp_ns << ',' << f.velocity_stamp_ns;
-    for (double value : f.values) file_ << ',' << value;
+          << ',' << f.anchor_stamp_ns << ',' << f.velocity_stamp_ns << ',' << observation_dim_;
+    for (size_t i = 0; i < kValueCount; ++i) {
+      if ((i >= kObservationRaw+observation_dim_ && i < kObservationNormalized) ||
+          (i >= kObservationNormalized+observation_dim_ && i < kAction)) continue;
+      file_ << ',' << f.values[i];
+    }
     file_ << '\n';
   }
   void Work() noexcept {
@@ -199,6 +206,7 @@ class DanceDiagnostics {
   std::thread worker_;
   std::ofstream file_;
   std::string path_;
+  size_t observation_dim_{kObservations};
   std::chrono::milliseconds flush_interval_{100};
 };
 

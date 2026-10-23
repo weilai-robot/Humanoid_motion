@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -24,14 +25,26 @@ std::filesystem::path SourceDir() {
 }
 
 YAML::Node Config() {
-  const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance.yaml").string());
+  const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance_v11.yaml").string());
   auto cfg = YAML::Clone(root["controllers"]["dance_x1"]);
   cfg["diagnostics"]["enabled"] = false;  // Tests opt in only when inspecting diagnostic output.
+  cfg["observation_layout"] = "full";
   cfg["state_source"] = "external_topics";  // Preserve the independent golden external-state fixture.
   cfg["joint_limits"] = root["joint_limits"];
   cfg["control_frequency_hz"] = root["control_frequecy"];
   cfg["model_file"] = (SourceDir() / "policy/dance_x1_v11_4999.bin").string();
   cfg["motion_file"] = (SourceDir() / "policy/dance_x1_motion.bin").string();
+  return cfg;
+}
+
+YAML::Node Config154() {
+  const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance.yaml").string());
+  auto cfg = YAML::Clone(root["controllers"]["dance_x1"]);
+  cfg["diagnostics"]["enabled"] = false;
+  cfg["joint_limits"] = root["joint_limits"];
+  cfg["control_frequency_hz"] = root["control_frequecy"];
+  cfg["model_file"] = (SourceDir()/"policy"/std::filesystem::path(cfg["model_file"].as<std::string>()).filename()).string();
+  cfg["motion_file"] = (SourceDir()/"policy/dance_x1_motion.bin").string();
   return cfg;
 }
 
@@ -206,6 +219,164 @@ TEST(DanceController, DiagnosticsRetainExactActorInputsCommandsAndDistinctAttemp
   EXPECT_EQ(saved["state_source"].as<std::string>(), "external_topics");
   EXPECT_EQ(saved["joint_list"].as<std::vector<std::string>>(), cfg["joint_list"].as<std::vector<std::string>>());
   std::filesystem::remove_all(dir);
+}
+
+TEST(DanceController, V12RejectsMismatchedModelLayoutAndStateSource) {
+  auto cfg = Config154();
+  cfg["model_file"] = (SourceDir() / "policy/dance_x1_v11_4999.bin").string();
+  DanceController wrong_model(true);
+  EXPECT_THROW(wrong_model.Init(cfg), std::runtime_error);
+  cfg = Config154(); cfg["observation_layout"] = "full";
+  DanceController wrong_layout(true);
+  EXPECT_THROW(wrong_layout.Init(cfg), std::runtime_error);
+  cfg = Config154(); cfg["state_source"] = "proprioceptive";
+  DanceController wrong_source(true);
+  EXPECT_THROW(wrong_source.Init(cfg), std::runtime_error);
+  cfg = Config(); cfg["model_file"] = (SourceDir() / "policy/dance_x1_v12_154_4999.bin").string();
+  DanceController wrong_full_model(true);
+  EXPECT_THROW(wrong_full_model.Init(cfg), std::runtime_error);
+}
+
+TEST(DanceController, V12NeedsOnlyImuAndEncodersAndMatchesIndependentCheckpoint) {
+  auto cfg = Config154();
+  const auto dir = std::filesystem::temp_directory_path()/
+      ("dance_v12_golden_"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  cfg["diagnostics"]["enabled"] = true;
+  cfg["diagnostics"]["directory"] = dir.string();
+  DanceController controller(true);
+  controller.Init(cfg);
+  ASSERT_TRUE(controller.UsesImuOnly());
+  ASSERT_FALSE(controller.UsesOdometry());
+  ASSERT_FALSE(controller.UsesProprioceptiveEstimator());
+  Sample sample(cfg);
+  sample.joint.effort.clear();  // No contact/torque calibration prerequisite.
+  sample.imu.linear_acceleration.x = std::numeric_limits<double>::quiet_NaN();
+  controller.SetImuData(sample.imu);  // Exercise IMU-before-joint callback order.
+  EXPECT_FALSE(controller.Ready());
+  controller.SetJointStateData(sample.joint, sample.index);
+  ASSERT_TRUE(controller.Ready());
+  controller.RestartController();
+  controller.Update();
+  ASSERT_FALSE(controller.Faulted()) << controller.FaultReason();
+  const auto cmd = controller.GetJointCmdData();
+  std::ifstream golden(SourceDir() / "test/data/dance_x1_v12_154_first_frame.csv");
+  ASSERT_TRUE(golden.good());
+  std::string line;
+  std::getline(golden, line);
+  for (int i = 0; i < 29; ++i) {
+    ASSERT_TRUE(bool(std::getline(golden, line)));
+    std::istringstream row(line); std::array<std::string, 5> fields;
+    for (auto& field : fields) ASSERT_TRUE(bool(std::getline(row, field, ',')));
+    ASSERT_EQ(cmd.name[i], fields[0]);
+    EXPECT_NEAR(cmd.position[i], std::stod(fields[1]), 2e-4) << cmd.name[i];
+    EXPECT_NEAR(cmd.effort[i], std::stod(fields[2]), 5e-3) << cmd.name[i];
+    EXPECT_DOUBLE_EQ(cmd.stiffness[i], std::stod(fields[3]));
+    EXPECT_NEAR(cmd.damping[i], std::stod(fields[4]), 1e-6);
+  }
+  controller.StopDiagnostics();
+  std::ifstream log(controller.DiagnosticPath());
+  ASSERT_TRUE(bool(std::getline(log, line)));
+  const auto columns = DiagnosticCsvRow(line);
+  std::map<std::string, size_t> index;
+  for (size_t i = 0; i < columns.size(); ++i) index[columns[i]] = i;
+  EXPECT_EQ(index.count("obs_raw_154"), 0u);
+  bool policy = false;
+  while (std::getline(log, line)) {
+    const auto row = DiagnosticCsvRow(line);
+    ASSERT_EQ(row.size(), columns.size());
+    if (row[index.at("event")] != "policy") continue;
+    policy = true;
+    EXPECT_EQ(row[index.at("observation_dim")], "154");
+    EXPECT_EQ(row[index.at("estimator_valid")], "0");
+    EXPECT_EQ(row[index.at("body_stamp_ns")], "0");
+    EXPECT_TRUE(std::isnan(std::stod(row[index.at("base_velocity_body_x")])));
+    EXPECT_TRUE(std::isnan(std::stod(row[index.at("anchor_error_norm")])));
+    std::ifstream observations(SourceDir() / "test/data/dance_x1_v12_154_observation.csv");
+    ASSERT_TRUE(bool(std::getline(observations, line)));
+    for (int i = 0; i < 154; ++i) {
+      ASSERT_TRUE(bool(std::getline(observations, line)));
+      std::istringstream values(line); std::array<std::string, 3> fields;
+      for (auto& field : fields) ASSERT_TRUE(bool(std::getline(values, field, ',')));
+      EXPECT_NEAR(std::stod(row[index.at("obs_raw_"+std::to_string(i))]), std::stod(fields[1]), 2e-5) << i;
+      EXPECT_NEAR(std::stod(row[index.at("obs_normalized_"+std::to_string(i))]), std::stod(fields[2]), 2e-5) << i;
+    }
+  }
+  EXPECT_TRUE(policy);
+  std::filesystem::remove_all(dir);
+}
+
+TEST(DanceController, V12ChecksReadinessSpeedsAndRejectsFrozenOrMissingFeedback) {
+  auto cfg = Config154();
+  DanceController controller(true); controller.Init(cfg);
+  Sample sample(cfg);
+  sample.Send(controller);
+  ASSERT_TRUE(controller.Ready());
+  sample.imu.angular_velocity.x = 0.3;
+  sample.Stamp(); sample.Send(controller);
+  EXPECT_FALSE(controller.Ready());
+  sample.imu.angular_velocity.x = 0;
+  sample.joint.velocity[0] = 0.6;
+  sample.Stamp(); sample.Send(controller);
+  EXPECT_FALSE(controller.Ready());
+  sample.joint.velocity[0] = 0;
+  sample.Stamp(); sample.Send(controller);
+  ASSERT_TRUE(controller.Ready());
+  controller.RestartController(); controller.Update();
+  ASSERT_FALSE(controller.Faulted());
+  std::this_thread::sleep_for(std::chrono::milliseconds(90));
+  sample.Send(controller);  // Replaying the same timestamps cannot extend freshness.
+  EXPECT_FALSE(controller.Ready());
+  controller.Update();
+  EXPECT_TRUE(controller.Faulted());
+}
+
+TEST(DanceController, V12UsesNewestCompleteSourceTimePairWithoutExtrapolating) {
+  auto cfg = Config154();
+  DanceController controller(true); controller.Init(cfg);
+  Sample sample(cfg);
+  sample.joint.header.stamp.sec = 10; sample.joint.header.stamp.nanosec = 0;
+  sample.imu.header.stamp = sample.joint.header.stamp;
+  controller.SetJointStateData(sample.joint, sample.index);
+  sample.imu.header.stamp.nanosec = 1000000;
+  controller.SetImuData(sample.imu);
+  EXPECT_FALSE(controller.Ready());  // No bracketing sample yet.
+  sample.joint.header.stamp.nanosec = 2000000;
+  controller.SetJointStateData(sample.joint, sample.index);
+  ASSERT_TRUE(controller.Ready());
+  sample.imu.header.stamp.nanosec = 3000000;
+  controller.SetImuData(sample.imu);
+  EXPECT_TRUE(controller.Ready());  // Previous complete pair survives callback ordering.
+  DanceController gap(true); gap.Init(cfg);
+  sample.joint.header.stamp.nanosec = 0;
+  gap.SetJointStateData(sample.joint, sample.index);
+  sample.imu.header.stamp.nanosec = 15000000;
+  gap.SetImuData(sample.imu);
+  sample.joint.header.stamp.nanosec = 20000000;
+  gap.SetJointStateData(sample.joint, sample.index);
+  EXPECT_FALSE(gap.Ready());  // 20 ms interpolation interval is rejected.
+}
+
+TEST(DanceController, V12HoldsTargetsFor20TicksAndUpdatesSaturatedAnklePdEveryTick) {
+  const auto cfg = Config154();
+  DanceController controller(true); controller.Init(cfg);
+  Sample sample(cfg); sample.Send(controller);
+  controller.RestartController(); controller.Update();
+  ASSERT_FALSE(controller.Faulted());
+  const auto first = controller.GetJointCmdData();
+  sample.joint.velocity[sample.index.at("left_ankle_pitch_joint")] = 100.0;
+  for (int tick = 1; tick < 20; ++tick) {
+    sample.Stamp(); sample.Send(controller); controller.Update();
+    ASSERT_FALSE(controller.Faulted());
+    const auto cmd = controller.GetJointCmdData();
+    for (size_t i = 0; i < cmd.name.size(); ++i) {
+      EXPECT_DOUBLE_EQ(cmd.position[i], first.position[i]);
+      if (cmd.name[i] == "left_ankle_pitch_joint") {
+        EXPECT_DOUBLE_EQ(cmd.effort[i], -80.0);
+        EXPECT_DOUBLE_EQ(cmd.stiffness[i], 0.0);
+        EXPECT_DOUBLE_EQ(cmd.damping[i], 0.0);
+      }
+    }
+  }
 }
 
 TEST(DanceController, FirstFrameMatchesV11Checkpoint) {

@@ -24,9 +24,8 @@
 
 namespace xyber_x1_infer::rl_control_module {
 
-// BeyondMimic X1 motion tracking. Estimate body state from IMU/leg feedback or
-// accept body odometry; compute the anchor with source-time waist FK.
-// Missing or stale estimates prevent entry and stop a running dance.
+// BeyondMimic X1 motion tracking. The 154-input actor uses IMU + waist FK;
+// the 160-input actor additionally requires translation/velocity estimates.
 class DanceController final : public ControllerBase {
  public:
   explicit DanceController(bool use_sim_handles);
@@ -45,6 +44,7 @@ class DanceController final : public ControllerBase {
 
   bool UsesOdometry() const { return use_odometry_; }
   bool UsesProprioceptiveEstimator() const { return use_proprioception_; }
+  bool UsesImuOnly() const { return use_imu_only_; }
   // Set during module initialization, before sensor subscriptions are started.
   void SetEstimatedOdometryCallback(std::function<void(const nav_msgs::msg::Odometry&)> callback) {
     estimated_odometry_callback_ = std::move(callback);
@@ -63,7 +63,8 @@ class DanceController final : public ControllerBase {
 
  private:
   static constexpr int kJoints = 29;
-  static constexpr int kObs = 160;
+  static constexpr int kMaxObs = 160;  // Fixed storage capacity; never pad a 154-input actor.
+  int observation_dim_{160};
   using Clock = std::chrono::steady_clock;
   using RowMajorMatrix = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
@@ -118,10 +119,10 @@ class DanceController final : public ControllerBase {
   std::array<float, kJoints> armature_{};  // Identified training dynamics; never an extra hardware torque.
   // q_policy = sign * (q_dcu - joint_offset); the inverse maps commands to DCU.
   std::array<float, kJoints> joint_sign_{};
-  std::array<float, kObs> mean_{};
-  std::array<float, kObs> inv_std_{};
-  std::array<float, kObs> observation_{};
-  std::array<float, kObs> raw_observation_{};
+  std::array<float, kMaxObs> mean_{};
+  std::array<float, kMaxObs> inv_std_{};
+  std::array<float, kMaxObs> observation_{};
+  std::array<float, kMaxObs> raw_observation_{};
   std::array<float, kJoints> last_action_{};
   std::array<float, kJoints> target_pos_{};
   Snapshot current_;
@@ -149,6 +150,16 @@ class DanceController final : public ControllerBase {
   const char* odometry_problem_{"no accepted body odometry; start the body state estimator"};
   bool use_odometry_{false};
   bool use_proprioception_{false};
+  bool use_imu_only_{false};
+  struct ImuSample {
+    builtin_interfaces::msg::Time stamp;
+    Eigen::Quaternionf orientation{Eigen::Quaternionf::Identity()};
+    Eigen::Vector3f gyro{Eigen::Vector3f::Zero()}, acceleration{Eigen::Vector3f::Zero()};
+    Clock::time_point received{};
+  };
+  static constexpr size_t kImuHistoryCapacity = 128;
+  std::array<ImuSample, kImuHistoryCapacity> imu_history_;  // Protected by sensor_mutex_.
+  size_t imu_next_{}, imu_count_{};
   std::array<size_t, 12> leg_indices_{};
   std::mutex estimator_mutex_;
   DanceEstimatorInputs estimator_inputs_;
@@ -171,6 +182,8 @@ class DanceController final : public ControllerBase {
   int sensor_timeout_ms_{80};
   float max_tilt_deg_{35.0f};
   float max_start_speed_{0.2f};
+  float max_start_joint_speed_{0.5f};
+  float max_start_angular_speed_{0.2f};
   float max_start_pose_error_{0.12f};
   float joint_limit_margin_{0.0f};
   float joint_limit_tolerance_{0.01f};

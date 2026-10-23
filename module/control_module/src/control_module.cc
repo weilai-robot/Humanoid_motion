@@ -214,7 +214,9 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       joint_offset_map_ = cfg_node["joint_offset"].as<std::map<std::string, double>>();
       if (dance_controller != controller_map_.end()) {
         const auto dance = std::dynamic_pointer_cast<DanceController>(dance_controller->second);
-        if (dance->UsesProprioceptiveEstimator()) {
+        if (dance->UsesImuOnly()) {
+          AIMRT_INFO("Dance state: 154-input actor uses IMU + source-time waist FK; no body odometry required");
+        } else if (dance->UsesProprioceptiveEstimator()) {
           const auto topic = cfg_node["sub_dance_odometry_name"].as<std::string>();
           dance_odometry_pub_ = core_.GetChannelHandle().GetPublisher(topic);
           AIMRT_CHECK_ERROR_THROW(aimrt::channel::RegisterPublishType<nav_msgs::msg::Odometry>(dance_odometry_pub_),
@@ -287,7 +289,9 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       const auto dance_it = controller_map_.find("dance_x1");
       if (dance_it != controller_map_.end()) {
         const auto dance = std::dynamic_pointer_cast<DanceController>(dance_it->second);
-        if (dance->UsesProprioceptiveEstimator()) {
+        if (dance->UsesImuOnly()) {
+          // IMU and joint subscriptions above are the complete 154-input state source.
+        } else if (dance->UsesProprioceptiveEstimator()) {
           // The controller receives the estimate directly; publishing is only
           // for inspection. Do not subscribe to our own or an external estimate.
         } else if (dance->UsesOdometry()) {

@@ -35,8 +35,9 @@ JOINTS = [
 
 MODEL_MAGIC = b"X1DNCE2\0"
 MOTION_MAGIC = b"X1MOTN1\0"
-LAYERS = (160, 512, 256, 128, 29)
+OBSERVATION_LAYOUTS = {160: "full", 154: "wo_state_estimation"}
 ROBOT_CONFIG = Path("whole_body_tracking/source/whole_body_tracking/whole_body_tracking/robots/x1.py")
+ENV_CONFIG = Path("whole_body_tracking/source/whole_body_tracking/whole_body_tracking/tasks/tracking/config/x1/flat_env_cfg.py")
 NORMALIZER_EPS = np.float32(1e-2)  # RSL-RL EmpiricalNormalization default
 
 
@@ -91,15 +92,19 @@ def write_float_array(handle, array) -> None:
     handle.write(values.tobytes(order="C"))
 
 
-def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
+def export_model(checkpoint: Path, output: Path, training_root: Path, observation_layout: str) -> dict:
     ckpt = torch.load(checkpoint, map_location="cpu", weights_only=True)
     weights = ckpt.get("model_state_dict", ckpt.get("model_dict"))
     norm = ckpt.get("obs_norm_state_dict", ckpt.get("obs_normalizer"))
     if weights is None or norm is None:
         raise ValueError("checkpoint has no actor or empirical normalizer")
+    obs_dim = weights["actor.0.weight"].shape[1]
+    if OBSERVATION_LAYOUTS.get(obs_dim) != observation_layout:
+        raise ValueError(f"actor dimension {obs_dim} does not match layout {observation_layout}")
+    layers = (obs_dim, 512, 256, 128, 29)
     mean = np.asarray(norm.get("_mean", norm.get("mean")), dtype=np.float32).reshape(-1)
     std = np.asarray(norm.get("_std"), dtype=np.float32).reshape(-1)
-    if mean.shape != (160,) or std.shape != (160,) or np.any(std < 0):
+    if mean.shape != (obs_dim,) or std.shape != (obs_dim,) or np.any(std < 0):
         raise ValueError("unexpected normalizer shape or standard deviation")
     inv_std = 1.0 / (std + NORMALIZER_EPS)
     params = joint_parameters(training_root)
@@ -107,11 +112,11 @@ def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as handle:
         handle.write(MODEL_MAGIC)
-        handle.write(struct.pack("<7I", 2, len(JOINTS), *LAYERS))
+        handle.write(struct.pack("<7I", 2, len(JOINTS), *layers))
         write_names(handle)
         for array in (*params, mean, inv_std):
             write_float_array(handle, array)
-        for i, (in_dim, out_dim) in enumerate(zip(LAYERS, LAYERS[1:])):
+        for i, (in_dim, out_dim) in enumerate(zip(layers, layers[1:])):
             key = i * 2
             w = weights[f"actor.{key}.weight"].detach().cpu().numpy()
             b = weights[f"actor.{key}.bias"].detach().cpu().numpy()
@@ -122,7 +127,7 @@ def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
 
     # Read the serialized bytes back, then compare deployed arithmetic against RSL-RL.
     blob = output.read_bytes()
-    if blob[:8] != MODEL_MAGIC or struct.unpack_from("<7I", blob, 8) != (2, 29, *LAYERS):
+    if blob[:8] != MODEL_MAGIC or struct.unpack_from("<7I", blob, 8) != (2, 29, *layers):
         raise ValueError("serialized model header mismatch")
     offset = 8 + 7 * 4
     for name in JOINTS:
@@ -139,16 +144,16 @@ def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
     for original in params:
         if not np.array_equal(read_values(29), original):
             raise ValueError("serialized joint parameters mismatch")
-    deployed_mean, deployed_inv_std = read_values(160), read_values(160)
+    deployed_mean, deployed_inv_std = read_values(obs_dim), read_values(obs_dim)
     deployed_layers = []
-    for in_dim, out_dim in zip(LAYERS, LAYERS[1:]):
+    for in_dim, out_dim in zip(layers, layers[1:]):
         deployed_layers.append((read_values(in_dim * out_dim).reshape(out_dim, in_dim), read_values(out_dim)))
     if offset != len(blob):
         raise ValueError("serialized model length mismatch")
 
     rng = np.random.default_rng(20260926)
     max_error = 0.0
-    for raw in (rng.normal(size=(128, 160)).astype(np.float32), np.zeros((1, 160), np.float32)):
+    for raw in (rng.normal(size=(128, obs_dim)).astype(np.float32), np.zeros((1, obs_dim), np.float32)):
         value = ((raw - deployed_mean) * deployed_inv_std).astype(np.float32)
         expected = value.copy()
         for i, (w, b) in enumerate(deployed_layers):
@@ -159,7 +164,7 @@ def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
         modules = []
         for i in range(4):
             key = i * 2
-            modules.append(torch.nn.Linear(LAYERS[i], LAYERS[i + 1]))
+            modules.append(torch.nn.Linear(layers[i], layers[i + 1]))
             modules[-1].weight.data = weights[f"actor.{key}.weight"].detach().clone()
             modules[-1].bias.data = weights[f"actor.{key}.bias"].detach().clone()
             if i != 3:
@@ -171,7 +176,9 @@ def export_model(checkpoint: Path, output: Path, training_root: Path) -> dict:
         max_error = max(max_error, float(np.max(np.abs(expected - torch_out))))
         if not np.allclose(expected, torch_out, atol=1e-4, rtol=2e-5):
             raise ValueError("exported arithmetic differs from actor")
-    return {"normalizer": "(obs - _mean) / (_std + 0.01)",
+    return {"observation_dim": obs_dim, "observation_layout": observation_layout,
+            "actor_layers": list(layers), "checkpoint_iteration": int(ckpt.get("iter", -1)),
+            "normalizer": "(obs - _mean) / (_std + 0.01)",
             "actor_max_abs_error": max_error,
             "joints": {name: dict(zip(("default_pos", "kp", "kd", "effort_limit", "action_scale", "armature"),
                                       (float(p[i]) for p in params))) for i, name in enumerate(JOINTS)}}
@@ -219,14 +226,17 @@ def main() -> None:
     parser.add_argument("--motion", type=Path, required=True)
     parser.add_argument("--model-out", type=Path, required=True)
     parser.add_argument("--motion-out", type=Path, required=True)
+    parser.add_argument("--observation-layout", choices=tuple(OBSERVATION_LAYOUTS.values()), required=True,
+                        help="explicit semantic contract; checkpoint input dimension must match")
     args = parser.parse_args()
-    metadata = export_model(args.checkpoint, args.model_out, args.training_root)
+    metadata = export_model(args.checkpoint, args.model_out, args.training_root, args.observation_layout)
     export_motion(args.motion, args.motion_out)
     metadata["format_version"] = 2
     metadata["policy_hz"] = 50
     metadata["sources"] = {label: {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                            for label, path in (("checkpoint", args.checkpoint), ("motion", args.motion),
-                                               ("robot_config", args.training_root / ROBOT_CONFIG))}
+                                               ("robot_config", args.training_root / ROBOT_CONFIG),
+                                               ("env_config", args.training_root / ENV_CONFIG))}
     metadata["assets"] = {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                           for path in (args.model_out, args.motion_out)}
     args.model_out.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")

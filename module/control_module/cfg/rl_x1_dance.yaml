@@ -353,21 +353,8 @@ controllers:
       enabled: true
       directory: test_logs/data_csv
       flush_ms: 100  # independent writer; 50 Hz samples plus lifecycle events
-    state_source: proprioceptive  # IMU + leg feedback -> body estimate -> source-time waist FK
-    state_estimator:
-      acceleration_scale: 1.0  # DCU must report specific force in m/s^2; static norm ~9.81
-      imu_position_in_base: [0.0, 0.0, 0.0]  # training IMU site; confirm physical lower-DCU offset
-      initialization_s: 0.5  # continuous stationary calibration with loaded feet
-      contact_on_force: 35.0
-      contact_off_force: 15.0
-      acceleration_noise: 0.1
-      bias_noise: 0.01
-      position_noise: 0.03
-      velocity_noise: 0.3
-      height_noise: 0.01
-      contact_velocity_limit: 0.25
-      max_gap_s: 0.01
-      max_flight_s: 0.35
+    observation_layout: wo_state_estimation  # 154 = 160 - anchor position error3 - base linear velocity3
+    state_source: imu  # IMU + source-time waist FK; no body estimator / external odometry gate
     joint_list: [left_hip_pitch_joint, lumbar_yaw_joint, right_hip_pitch_joint,
                  left_hip_roll_joint, lumbar_roll_joint, right_hip_roll_joint,
                  left_hip_yaw_joint, lumbar_pitch_joint, right_hip_yaw_joint,
@@ -378,7 +365,7 @@ controllers:
                  left_elbow_pitch_joint, right_elbow_pitch_joint, left_elbow_yaw_joint,
                  right_elbow_yaw_joint, left_wrist_pitch_joint, right_wrist_pitch_joint,
                  left_wrist_roll_joint, right_wrist_roll_joint]
-    model_file: cfg/control_module/policy/dance_x1_v11_4999.bin
+    model_file: cfg/control_module/policy/dance_x1_v12_154_4999.bin
     motion_file: cfg/control_module/policy/dance_x1_motion.bin
     decimation: 20          # 1000 Hz / 20 = 50 Hz
     prepare_ticks: 0        # pd_dance_pose 完成准备/等待后自动接管，策略内不再做过渡
@@ -387,10 +374,12 @@ controllers:
     anchor_frame: lumbar_pitch_link
     base_frame: base_link
     max_tilt_deg: 35.0
-    max_start_speed: 0.2
+    max_start_speed: 0.2  # used only by the 160-input full-state mode
+    max_start_joint_speed: 0.5  # rad/s; continuous readiness hold
+    max_start_angular_speed: 0.2  # rad/s; IMU gyro norm
     start_pose: default_q   # 准备位使用训练默认姿态；策略播放仍从参考帧 0 开始
     max_start_pose_error: 0.12  # Guide 检查实测角度已接近 default_q
-    # 锚点位置偏差继续输入 policy，不再按偏差大小中止播放。
+    # 154 维 actor 不使用锚点位置误差或机身线速度。
     # 播放阶段不因实测关节越限或瞬时跟踪误差退出；输出目标仍按 joint_limits 裁剪。
     joint_limit_margin: 0.0
     joint_limit_tolerance: 0.01  # 仅用于启动前的实测关节限位检查

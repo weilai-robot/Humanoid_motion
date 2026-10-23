@@ -10,10 +10,13 @@ dedicated deployment YAML. No ROS messages, motors or viewers are opened.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import importlib.util
 import json
 import struct
+import subprocess
+import tempfile
 from pathlib import Path
 
 import mujoco
@@ -31,14 +34,16 @@ def load_yaml(path):
 
 
 def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: float,
-        candidate: str = "configured", state_feedback: str = "truth", estimator_parameters=None,
-        estimator_noise_seed=None) -> dict:
+        candidate: str = "configured", state_feedback=None, estimator_parameters=None,
+        estimator_noise_seed=None, config_path=None) -> dict:
     control = Path(__file__).resolve().parents[1]
-    cfg = load_yaml(control / "cfg/rl_x1_dance.yaml")
+    cfg = load_yaml(config_path or control / "cfg/rl_x1_dance.yaml")
     conf = cfg["controllers"]["dance_x1"]
+    state_feedback = state_feedback or ("imu" if conf["state_source"] == "imu" else "truth")
+    model_path = control / "policy" / Path(conf["model_file"]).name
     assert cfg["control_frequecy"] == 1000 and conf["decimation"] == 20
     assert conf["prepare_ticks"] == 0 and not conf["joint_sign"]
-    metadata = json.loads((control / "policy/dance_x1_v11_4999.json").read_text())
+    metadata = json.loads(model_path.with_suffix(".json").read_text())
     for name, digest in metadata["assets"].items():
         assert hashlib.sha256((control / "policy" / name).read_bytes()).hexdigest() == digest
 
@@ -49,8 +54,12 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
     spec.loader.exec_module(math)
     names = conf["joint_list"]
     assert names == list(metadata["joints"])
-    blob = (control / "policy/dance_x1_v11_4999.bin").read_bytes()
-    assert blob[:8] == b"X1DNCE2\0" and struct.unpack_from("<7I", blob, 8) == (2, 29, 160, 512, 256, 128, 29)
+    blob = model_path.read_bytes()
+    obs_dim = struct.unpack_from("<7I", blob, 8)[2]
+    without_translation = conf.get("observation_layout", "full") == "wo_state_estimation"
+    assert obs_dim == (154 if without_translation else 160)
+    assert (state_feedback == "imu") == without_translation
+    assert blob[:8] == b"X1DNCE2\0" and struct.unpack_from("<7I", blob, 8) == (2, 29, obs_dim, 512, 256, 128, 29)
     offset = 36
     for name in names:
         assert blob[offset:offset + 32].split(b"\0", 1)[0].decode() == name
@@ -63,9 +72,9 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
         return value
 
     default, kp, kd, effort, scale, armature = [read(29) for _ in range(6)]
-    mean, inv_std = read(160), read(160)
+    mean, inv_std = read(obs_dim), read(obs_dim)
     layers = []
-    for n_in, n_out in zip((160, 512, 256, 128), (512, 256, 128, 29)):
+    for n_in, n_out in zip((obs_dim, 512, 256, 128), (512, 256, 128, 29)):
         layers.append((torch.from_numpy(read(n_in * n_out).reshape(n_out, n_in)),
                        torch.from_numpy(read(n_out))))
     assert offset == len(blob)
@@ -78,27 +87,49 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
                 value = torch.nn.functional.elu(value)
         return value.numpy()
 
-    motion = np.load(training_root / "whole_body_tracking/motions/dance_x1_train.npz")
-    order = [list(motion["joint_names"]).index(name) for name in names]
-    ref_q, ref_v = motion["joint_pos"][:, order], motion["joint_vel"][:, order]
-    anchor_index = list(motion["body_names"]).index(conf["anchor_frame"])
-    ref_pos = motion["body_pos_w"][:, anchor_index]
-    ref_quat = motion["body_quat_w"][:, anchor_index]
+    motion_blob = (control / "policy" / Path(conf["motion_file"]).name).read_bytes()
+    version, frame_count, joint_count, fps = struct.unpack_from("<4I", motion_blob, 8)
+    assert motion_blob[:8] == b"X1MOTN1\0" and (version, joint_count, fps) == (1, 29, 50)
+    motion_offset = 24
+    for name in names:
+        assert motion_blob[motion_offset:motion_offset+32].split(b"\0", 1)[0].decode() == name
+        motion_offset += 32
+    frames = np.frombuffer(motion_blob, dtype="<f4", offset=motion_offset).reshape(frame_count, 65)
+    assert np.isfinite(frames).all()
+    ref_q, ref_v, ref_pos, ref_quat = frames[:, :29], frames[:, 29:58], frames[:, 58:61], frames[:, 61:65]
     lower = np.array([cfg["joint_limits"][name]["lower"] for name in names])
     upper = np.array([cfg["joint_limits"][name]["upper"] for name in names])
     assert np.all(ref_q >= lower - 1e-4) and np.all(ref_q <= upper + 1e-4)
 
-    model_path = training_root / "whole_body_tracking/source/whole_body_tracking/whole_body_tracking/assets/xyber_x1/mjcf/xyber_x1_flat.xml"
-    model = mujoco.MjModel.from_xml_path(str(model_path))
+    mjcf_path = training_root / "whole_body_tracking/source/whole_body_tracking/whole_body_tracking/assets/xyber_x1/mjcf/xyber_x1_flat.xml"
+    model = mujoco.MjModel.from_xml_path(str(mjcf_path))
     model.opt.timestep = 0.001
     data = mujoco.MjData(model)
     from dance_estimator_probe import CxxEstimator
-    estimator = CxxEstimator(model, estimator_parameters, conf.get("state_estimator"), estimator_noise_seed) if state_feedback != "truth" else None
+    estimator = CxxEstimator(model, estimator_parameters, conf.get("state_estimator"), estimator_noise_seed) if state_feedback in ("shadow", "proprioceptive") else None
+    fk_temp = tempfile.TemporaryDirectory(prefix="x1_dance_fk_") if state_feedback == "imu" else None
+    fk = None
+    if fk_temp:
+        library = Path(fk_temp.name) / "waist_fk.so"
+        subprocess.run(["clang++", "-std=c++17", "-O2", "-shared", "-fPIC", "-I", str(control / "include"),
+                        str(control / "test/dance_state_adapter_capi.cc"), "-o", str(library)], check=True)
+        fk_library = ctypes.CDLL(str(library))
+        fk = fk_library.dance_waist_fk
+        pointer = np.ctypeslib.ndpointer(dtype=np.float64, ndim=1, flags="C_CONTIGUOUS")
+        fk.argtypes = [pointer, pointer]
+        fk.restype = ctypes.c_int
+    max_fk_orientation_error = 0.0
 
     def finish(result):
-        result.update(state_feedback=state_feedback, estimator=estimator.metrics() if estimator else None)
+        result.update(state_feedback=state_feedback, observation_dim=obs_dim,
+                      observation_layout=conf.get("observation_layout", "full"),
+                      model_sha256=hashlib.sha256(blob).hexdigest(),
+                      max_fk_orientation_error=max_fk_orientation_error,
+                      estimator=estimator.metrics() if estimator else None)
         if estimator:
             estimator.close()
+        if fk_temp:
+            fk_temp.cleanup()
         return result
 
     sensor_time = None
@@ -112,7 +143,18 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
         return estimator.step(data) if estimator else None
 
     def feedback():
+        nonlocal max_fk_orientation_error
         estimated = estimate()
+        if state_feedback == "imu":
+            waist = [data.qpos[model.jnt_qposadr[model.joint(name).id]] for name in
+                     ("lumbar_yaw_joint", "lumbar_roll_joint", "lumbar_pitch_joint")]
+            inputs = np.r_[data.qpos[3:7], waist].astype(np.float64)
+            output = np.empty(4, dtype=np.float64)
+            assert fk(inputs, output) == 1
+            error = min(np.linalg.norm(output-data.xquat[anchor]), np.linalg.norm(output+data.xquat[anchor]))
+            max_fk_orientation_error = max(max_fk_orientation_error, float(error))
+            assert error < 1e-6
+            return np.zeros(3), output, np.zeros(3)
         if state_feedback == "proprioceptive":
             if estimated is None:
                 return None
@@ -223,8 +265,11 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
     def entry_ready():
         tilt = float(np.degrees(np.arccos(np.clip(math.quat_to_rotmat(data.qpos[3:7])[2, 2], -1, 1))))
         measured = feedback()
+        speed_ready = (np.max(np.abs(data.qvel[vadr])) <= conf["max_start_joint_speed"]
+                       and np.linalg.norm(data.qvel[3:6]) <= conf["max_start_angular_speed"]
+                       if without_translation else measured is not None and np.linalg.norm(measured[2]) <= conf["max_start_speed"])
         return (np.max(np.abs(data.qpos[qadr] - pose_target)) <= conf["max_start_pose_error"]
-                and measured is not None and np.linalg.norm(measured[2]) <= conf["max_start_speed"]
+                and measured is not None and speed_ready
                 and tilt <= conf["max_tilt_deg"]
                 and np.all(data.qpos[qadr] >= lower - conf["joint_limit_tolerance"])
                 and np.all(data.qpos[qadr] <= upper + conf["joint_limit_tolerance"]))
@@ -334,10 +379,15 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
             ref_position = translation + math.quat_rotate(alignment, ref_pos[frame_count])
             ref_orientation = math.quat_mul(alignment, ref_quat[frame_count])
             delta, rotation = math.subtract_frame_transform(anchor_position, anchor_orientation, ref_position, ref_orientation)
-            raw = np.concatenate((ref_q[frame_count], ref_v[frame_count], delta,
-                                  math.quat_to_rotmat(rotation)[:, :2].flatten(),
-                                  base_velocity, data.qvel[3:6],
-                                  q - default, velocity, last_action)).astype(np.float32)
+            terms = [ref_q[frame_count], ref_v[frame_count]]
+            if not without_translation:
+                terms.append(delta)
+            terms.append(math.quat_to_rotmat(rotation)[:, :2].flatten())
+            if not without_translation:
+                terms.append(base_velocity)
+            terms.extend((data.qvel[3:6], q-default, velocity, last_action))
+            raw = np.concatenate(terms).astype(np.float32)
+            assert raw.shape == (obs_dim,)
             last_action = actor(raw)
             if not np.isfinite(last_action).all() or np.max(np.abs(last_action)) > 20:
                 fault = "policy output"
@@ -347,7 +397,8 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
             clip_count += int(np.count_nonzero((raw_target < lower_target) | (raw_target > upper_target)))
             target = np.clip(raw_target, lower_target, upper_target)
             frame_count += 1
-            anchor_errors.append(float(np.linalg.norm(delta)))
+            if not without_translation:
+                anchor_errors.append(float(np.linalg.norm(delta)))
             truth_anchor_errors.append(float(np.linalg.norm(truth_translation + math.quat_rotate(alignment, ref_pos[frame_count-1])-data.xpos[anchor])))
         # Position target is ZOH; the PD torque uses fresh state at 1000 Hz.
         data.ctrl[actuators] = np.clip(kp * (target - q) - kd * velocity, -effort, effort)
@@ -378,8 +429,9 @@ def main():
     parser.add_argument("--ready-timeout", type=float, default=10.0,
                         help="probe budget after preparation transition; playback starts automatically when ready")
     parser.add_argument("--yaw", type=float, default=0.0)
-    parser.add_argument("--state-feedback", choices=("truth", "shadow", "proprioceptive"), default="truth",
-                        help="shadow scores the C++ estimator; proprioceptive actually feeds its state to the actor")
+    parser.add_argument("--config", type=Path, help="deployment YAML; defaults to rl_x1_dance.yaml")
+    parser.add_argument("--state-feedback", choices=("imu", "truth", "shadow", "proprioceptive"),
+                        help="defaults from YAML; imu uses production C++ waist FK without translation feedback")
     parser.add_argument("--estimator-parameters", type=float, nargs=4, metavar=("ACC_NOISE", "VEL_NOISE", "POS_NOISE", "CONTACT_GATE"),
                         help="offline candidate only; output records parameters, production YAML is not changed")
     parser.add_argument("--estimator-noise-seed", type=int, help="perturb estimator inputs with explicit synthetic noise; not a hardware noise model")
@@ -396,7 +448,7 @@ def main():
         parser.error("estimator candidate parameters must be positive and finite")
     torch.set_num_threads(1)
     result = run(args.training_root, args.stand_hold, args.yaw, args.ready_timeout, args.candidate, args.state_feedback,
-                 args.estimator_parameters, args.estimator_noise_seed)
+                 args.estimator_parameters, args.estimator_noise_seed, args.config)
     output = json.dumps(result, indent=2) + "\n"
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)

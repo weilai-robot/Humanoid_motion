@@ -30,7 +30,7 @@ int main() {
   std::vector<std::string> joints;
   for (size_t i = 0; i < D::kJoints; ++i) joints.push_back("joint_"+std::to_string(i));
   const auto columns = D::Columns(joints);
-  Check(columns.size() == 23+D::kValueCount, "schema offsets/column count must agree");
+  Check(columns.size() == 24+D::kValueCount, "schema offsets/column count must agree");
   auto column = [&](const std::string& name) {
     const auto it = std::find(columns.begin(), columns.end(), name);
     Check(it != columns.end(), "missing expected column"); return size_t(it-columns.begin());
@@ -75,6 +75,28 @@ int main() {
   logger.Stop();
   Check(logger.Dropped() > 0, "queue overload is counted instead of blocking producer");
   Check(!logger.IoError(), "overflow must not corrupt file");
+  Check(logger.Start(root.string(), joints, 10, 16, 154), "154-input logger must start");
+  frame.values[D::kObservationRaw+153] = 153.25;
+  frame.values[D::kObservationNormalized+153] = -153.25;
+  frame.values[D::kAction] = 0.125;
+  Check(logger.Enqueue(frame), "154-input frame must enqueue");
+  logger.Stop();
+  std::ifstream short_file(logger.Path());
+  Check(bool(std::getline(short_file, line)), "154-input header");
+  const auto short_columns = Split(line);
+  Check(short_columns == D::Columns(joints, 154), "154-input schema");
+  Check(short_columns.size() == columns.size()-12, "no padded observation columns");
+  Check(std::find(short_columns.begin(), short_columns.end(), "obs_raw_154") == short_columns.end(), "154-input boundary");
+  Check(bool(std::getline(short_file, line)), "154-input row");
+  const auto short_row = Split(line);
+  Check(short_row.size() == short_columns.size(), "154-input row/header agree");
+  for (const auto& pair : std::vector<std::pair<std::string, double>>{
+       {"schema_version", 2}, {"observation_dim", 154}, {"obs_raw_153", 153.25},
+       {"obs_normalized_153", -153.25}, {"action_joint_0", 0.125}}) {
+    const auto i = std::find(short_columns.begin(), short_columns.end(), pair.first)-short_columns.begin();
+    Check(i < short_columns.size() && std::stod(short_row[i]) == pair.second, "154-input field boundaries retained");
+  }
+  Check(!logger.Start(root.string(), joints, 10, 16, 155), "unknown observation dimension rejected");
   std::ofstream(root/"not_a_directory") << "test";
   Check(!logger.Start((root/"not_a_directory"/"child").string(), joints), "unwritable path must fail cleanly");
   Check(!logger.Start(root.string(), joints, 0), "invalid flush interval rejected");
