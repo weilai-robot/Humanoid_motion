@@ -10,10 +10,10 @@ void* dance_finish_create(const double* parameters, const double* joints, const 
       &c.landing_hold_s, &c.stand_blend_s, &c.verify_s, &c.max_tilt_deg, &c.quiet_tilt_deg,
       &c.quiet_gyro, &c.quiet_joint_speed, &c.quiet_base_speed, &c.contact_on, &c.contact_off,
       &c.max_foot_height_delta, &c.max_foot_velocity_delta, &c.recovery_tilt_deg, &c.recovery_gyro,
-      &c.recovery_speed, &c.recovery_delay_s, &c.upper_target_speed, &c.force_filter_s};
-    for (size_t i = 0; i < 22; ++i) *fields[i] = parameters[i];
+      &c.recovery_speed, &c.recovery_delay_s, &c.upper_target_speed, &c.force_filter_s, &c.max_stand_pose_error};
+    for (size_t i = 0; i < 23; ++i) *fields[i] = parameters[i];
     size_t offset = 0;
-    for (auto* values : {&c.lower, &c.upper, &c.nominal, &c.kp, &c.kd, &c.stand_kp, &c.stand_kd}) {
+    for (auto* values : {&c.lower, &c.upper, &c.nominal, &c.kp, &c.kd, &c.stand_kp, &c.stand_kd, &c.stand_pose}) {
       std::copy_n(joints+offset, 29, values->begin()); offset += 29;
     }
     for (size_t i = 0; i < 12; ++i) c.legs[i] = legs[i];

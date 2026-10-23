@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <ctime>
 #include <pthread.h>
+#include <set>
 #include <utility>
 
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
@@ -182,6 +183,27 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
           const auto finisher = std::dynamic_pointer_cast<RLController>(stop->second);
           AIMRT_CHECK_ERROR_THROW(finisher && finisher->IsDanceFinisher(), "invalid dedicated dance finisher");
           dance->ValidateFinisher(cfg_node["controllers"]["rl_dance_finish"]);
+          const auto stand = cfg_node["controllers"]["pd_stand"];
+          const auto stand_names = stand["joint_list"].as<std::vector<std::string>>();
+          const auto finish_names = finisher->GetJointList();
+          const auto finish_cfg = cfg_node["controllers"]["rl_dance_finish"]["dance_finish"];
+          AIMRT_CHECK_ERROR_THROW(stand_names.size() == 29 && finish_names.size() == 29 &&
+              std::set<std::string>(stand_names.begin(), stand_names.end()).size() == 29,
+              "stand/finish joint lists must cover 29 unique joints");
+          for (const auto& fields : {std::pair{"init_state", "stand_pose"},
+                                    std::pair{"stiffness", "stand_stiffness"},
+                                    std::pair{"damping", "stand_damping"}}) {
+            const auto reference = stand[fields.first].as<std::vector<double>>();
+            const auto target = finish_cfg[fields.second].as<std::vector<double>>();
+            AIMRT_CHECK_ERROR_THROW(reference.size() == 29 && target.size() == 29,
+                                    "stand/finish pose and gains must cover 29 joints");
+            for (size_t i = 0; i < finish_names.size(); ++i) {
+              const auto j = std::find(stand_names.begin(), stand_names.end(), finish_names[i]);
+              AIMRT_CHECK_ERROR_THROW(j != stand_names.end() && std::isfinite(target[i]) &&
+                  std::abs(target[i]-reference[std::distance(stand_names.begin(), j)]) < 1e-9,
+                  "finisher stand pose/gains must match pd_stand by joint name: {}", finish_names[i]);
+            }
+          }
           for (const auto& state : {"dance_finish", "dance_stand"})
             AIMRT_CHECK_ERROR_THROW(cfg_node["robot_states"][state]["internal_trigger"].as<bool>() &&
                 cfg_node["robot_states"][state]["trigger_topic"].as<std::string>() == std::string("/")+state &&
@@ -567,7 +589,7 @@ bool ControlModule::MainLoop() {
             if (state_machine_.GetCurrentState() == "dance_finish" && amp->FinishStandingConfirmed() &&
                 state_machine_.OnEvent("/dance_stand")) {
               RestartCurrentState();
-              AIMRT_INFO("Dance stopping complete: continuous quiet double support verified; monitored standing remains active");
+              AIMRT_INFO("Dance stopping complete: configured B-key stand pose reached with continuous quiet double support; monitored standing remains active");
             } else if (state_machine_.GetCurrentState() == "dance_stand" && amp->FinishRecovering() &&
                        state_machine_.OnEvent("/dance_finish")) {
               RestartCurrentState();

@@ -29,6 +29,7 @@ struct Fixture {
       cfg.legs[j] = j; input.q[j] = cfg.nominal[j] = row[10+j];
       input.effort[j] = row[34+j]; unloaded[j] = row[46+j];
     }
+    cfg.stand_pose = cfg.nominal;
   }
 };
 void Step(DanceFinishCore& core, Fixture& f, int start_ms, int end_ms, bool fresh = true) {
@@ -38,21 +39,24 @@ void Step(DanceFinishCore& core, Fixture& f, int start_ms, int end_ms, bool fres
     Check(!core.Faulted(), "valid loaded fixture must not fault");
   }
 }
-void CheckNominalAndRecovery() {
-  Fixture f; f.input.q[15] = 0.03;
+void CheckConfiguredStandAndRecovery() {
+  Fixture f; f.input.q[15] = 0.03; f.cfg.stand_pose[15] = 0.3;
   DanceFinishCore core(f.cfg); core.Begin(f.cfg.nominal, 1000000000LL);
   Step(core, f, 0, 2999);
   Check(core.GetPhase() != DanceFinishCore::Phase::kStandBlend && !core.StandingConfirmed(),
-        "upper settling phase must finish before static capture");
-  Step(core, f, 3000, 3999);
+        "upper settling phase must finish before stand takeover");
+  Step(core, f, 3000, 6999);
   Check(core.GetPhase() == DanceFinishCore::Phase::kStandBlend, "quiet loaded feet permit gradual standing handoff");
-  Step(core, f, 4000, 6001);
-  Check(core.StandingConfirmed(), "two seconds of quiet monitored standing are required");
-  Check(std::abs(core.Targets()[15]-0.03) < 1e-12, "capture measured quiet stance, not a nominal pose jump");
+  Step(core, f, 7000, 9001);
+  Check(!core.StandingConfirmed(), "quiet feedback away from configured stand cannot certify completion");
+  Check(std::abs(core.Targets()[15]-0.3) < 1e-12, "final target must equal configured stand, not measured capture");
   Check(core.Kp()[0] == 300 && core.Kd()[0] == 5, "stand gains blend to configured endpoint");
+  f.input.q[15] = 0.3;
+  Step(core, f, 9002, 11003);
+  Check(core.StandingConfirmed(), "two seconds of quiet feedback at configured stand are required");
   f.input.contact_input_valid = false;
   bool saw_recovery = false;
-  for (int ms = 6002; ms <= 6202; ++ms) {
+  for (int ms = 11004; ms <= 11204; ++ms) {
     const auto old_phase = core.GetPhase(); const auto old_kp = core.Kp(); const auto old_target = core.Targets();
     Step(core, f, ms, ms);
     if (old_phase == DanceFinishCore::Phase::kStanding && core.GetPhase() == DanceFinishCore::Phase::kBrake) {
@@ -64,7 +68,7 @@ void CheckNominalAndRecovery() {
   Check(!core.StandingConfirmed() && core.Recoveries() == 1 &&
         core.GetPhase() != DanceFinishCore::Phase::kStanding, "support loss resumes balance instead of keep");
   f.input.contact_input_valid = true;
-  Step(core, f, 6203, 12500);
+  Step(core, f, 11205, 20500);
   Check(core.StandingConfirmed(), "fresh quiet support can recover and reverify");
 }
 void CheckMissingAndFrozenSupport() {
@@ -112,12 +116,15 @@ void CheckLimitsAndFaults() {
   bad = f.cfg; bad.contact_off = bad.contact_on;
   threw = false; try { DanceFinishCore invalid(bad); } catch (const std::exception&) { threw = true; }
   Check(threw, "invalid load hysteresis rejected");
+  bad = f.cfg; bad.stand_pose[0] = 4;
+  threw = false; try { DanceFinishCore invalid(bad); } catch (const std::exception&) { threw = true; }
+  Check(threw, "out-of-limit configured stand pose rejected");
 }
 }  // namespace
 
 int main() {
   try {
-    CheckNominalAndRecovery(); CheckMissingAndFrozenSupport(); CheckLimitsAndFaults();
-    std::cout << "PASS: independent loaded/unloaded fixture, phase/quiet gates, measured capture, recovery, frozen stamps, bounds/slew, clock/tilt faults\n";
+    CheckConfiguredStandAndRecovery(); CheckMissingAndFrozenSupport(); CheckLimitsAndFaults();
+    std::cout << "PASS: independent loaded/unloaded fixture, configured stand/pose-arrival gates, recovery, frozen stamps, bounds/slew, clock/tilt faults\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

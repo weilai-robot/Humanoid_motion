@@ -17,6 +17,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace xyber_x1_infer::rl_control_module {
 namespace {
@@ -1011,6 +1012,32 @@ TEST(DanceController, CompletionUsesInternalFinishingAndMonitoredStandingWithRec
   ASSERT_TRUE(machine.OnEvent("/dance_finish")); EXPECT_EQ(controller, machine.GetCurrentControllerNames());
   ASSERT_TRUE(machine.OnEvent("/keep_mode"));
   EXPECT_FALSE(machine.OnEvent("/dance_stand")); EXPECT_FALSE(machine.OnEvent("/dance_finish"));
+}
+
+TEST(DanceController, AutomaticFinishReturnsToBKeyStandPoseAndGainsByJointName) {
+  const auto root = YAML::LoadFile((SourceDir()/"cfg/rl_x1_dance.yaml").string());
+  const auto stand = root["controllers"]["pd_stand"];
+  const auto finish = root["controllers"]["rl_dance_finish"];
+  const auto names = finish["joint_list"].as<std::vector<std::string>>();
+  const auto stand_names = stand["joint_list"].as<std::vector<std::string>>();
+  ASSERT_EQ(names.size(), 29); ASSERT_EQ(stand_names.size(), 29);
+  for (const auto& fields : {std::pair{"init_state", "stand_pose"},
+                            std::pair{"stiffness", "stand_stiffness"},
+                            std::pair{"damping", "stand_damping"}}) {
+    const auto target = finish["dance_finish"][fields.second].as<std::vector<double>>();
+    const auto reference = stand[fields.first].as<std::vector<double>>();
+    ASSERT_EQ(target.size(), 29); ASSERT_EQ(reference.size(), 29);
+    for (size_t i = 0; i < names.size(); ++i) {
+      const auto found = std::find(stand_names.begin(), stand_names.end(), names[i]);
+      ASSERT_NE(found, stand_names.end());
+      EXPECT_DOUBLE_EQ(target[i], reference[std::distance(stand_names.begin(), found)]);
+    }
+  }
+  auto cfg = ConfigFinish();
+  cfg["dance_finish"]["stand_pose"] = std::vector<double>{0};
+  RLController missing_pose(true); EXPECT_ANY_THROW(missing_pose.Init(cfg));
+  cfg = ConfigFinish(); cfg["dance_finish"]["stand_pose"][0] = 100.0;
+  RLController invalid_pose(true); EXPECT_ANY_THROW(invalid_pose.Init(cfg));
 }
 
 TEST(DanceController, AcceptedGuideStartsAfterHoldWithoutAnotherButtonAndStopCancels) {

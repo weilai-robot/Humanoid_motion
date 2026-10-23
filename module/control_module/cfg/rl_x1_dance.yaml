@@ -578,7 +578,7 @@ controllers:
       upper_blend_s: 2.0
       landing_min_s: 2.0
       landing_hold_s: 0.75
-      stand_blend_s: 1.0
+      stand_blend_s: 4.0
       verify_s: 2.0
       max_tilt_deg: 35.0
       quiet_tilt_deg: 10.0
@@ -658,3 +658,34 @@ controllers:
       diagnostics:
         enabled: true
         directory: test_logs/data_csv
+      stand_pose:
+      - 0.4
+      - 0.0
+      - -0.4
+      - 0.05
+      - 0.0
+      - -0.05
+      - -0.31
+      - 0.0
+      - 0.31
+      - 0.49
+      - 0.0
+      - 0.0
+      - 0.49
+      - -0.21
+      - 0.0
+      - 0.0
+      - -0.21
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      max_stand_pose_error: 0.12

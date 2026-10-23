@@ -232,16 +232,19 @@ void RLController::Init(const YAML::Node& cfg_node) {
       {"max_foot_height_delta", &c.max_foot_height_delta}, {"max_foot_velocity_delta", &c.max_foot_velocity_delta},
       {"recovery_tilt_deg", &c.recovery_tilt_deg}, {"recovery_gyro", &c.recovery_gyro},
       {"recovery_speed", &c.recovery_speed}, {"recovery_delay_s", &c.recovery_delay_s},
-      {"upper_target_speed", &c.upper_target_speed}, {"force_filter_s", &c.force_filter_s}};
+      {"upper_target_speed", &c.upper_target_speed}, {"force_filter_s", &c.force_filter_s},
+      {"max_stand_pose_error", &c.max_stand_pose_error}};
     for (const auto& [key, value] : fields) if (finish[key]) *value = finish[key].as<double>();
     AIMRT_CHECK_ERROR_THROW(c.max_tilt_deg == amp_conf_.max_tilt_deg, "finish and AMP tilt limits must match");
     const auto p = finish["stand_stiffness"].as<std::vector<double>>();
     const auto d = finish["stand_damping"].as<std::vector<double>>();
-    AIMRT_CHECK_ERROR_THROW(p.size() == 29 && d.size() == 29, "finish stand gains must cover 29 joints");
+    const auto pose = finish["stand_pose"].as<std::vector<double>>();
+    AIMRT_CHECK_ERROR_THROW(p.size() == 29 && d.size() == 29 && pose.size() == 29,
+                            "finish stand pose/gains must cover 29 joints");
     for (size_t i = 0; i < 29; ++i) {
       c.lower[i] = joint_conf_.pos_limit_lower(i); c.upper[i] = joint_conf_.pos_limit_upper(i);
       c.nominal[i] = joint_conf_.init_state(i); c.kp[i] = joint_conf_.stiffness(i); c.kd[i] = joint_conf_.damping(i);
-      c.stand_kp[i] = p[i]; c.stand_kd[i] = d[i];
+      c.stand_kp[i] = p[i]; c.stand_kd[i] = d[i]; c.stand_pose[i] = pose[i];
     }
     for (size_t i = 0; i < 12; ++i) {
       const auto j = std::find(joint_names_.begin(), joint_names_.end(), kDanceLegJointNames[i]);

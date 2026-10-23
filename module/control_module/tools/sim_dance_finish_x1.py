@@ -9,7 +9,7 @@ import argparse, ctypes, hashlib, json, sys, tempfile, subprocess
 import numpy as np, torch, mujoco
 control = Path(__file__).resolve().parents[1]
 from sim_beyondmimic_x1 import run, load_yaml
-PARAMETER_KEYS = ('blend_s', 'upper_delay_s', 'upper_blend_s', 'landing_min_s', 'landing_hold_s', 'stand_blend_s', 'verify_s', 'max_tilt_deg', 'quiet_tilt_deg', 'quiet_gyro', 'quiet_joint_speed', 'quiet_base_speed', 'contact_on', 'contact_off', 'max_foot_height_delta', 'max_foot_velocity_delta', 'recovery_tilt_deg', 'recovery_gyro', 'recovery_speed', 'recovery_delay_s', 'upper_target_speed', 'force_filter_s')
+PARAMETER_KEYS = ('blend_s', 'upper_delay_s', 'upper_blend_s', 'landing_min_s', 'landing_hold_s', 'stand_blend_s', 'verify_s', 'max_tilt_deg', 'quiet_tilt_deg', 'quiet_gyro', 'quiet_joint_speed', 'quiet_base_speed', 'contact_on', 'contact_off', 'max_foot_height_delta', 'max_foot_velocity_delta', 'recovery_tilt_deg', 'recovery_gyro', 'recovery_speed', 'recovery_delay_s', 'upper_target_speed', 'force_filter_s', 'max_stand_pose_error')
 parser = argparse.ArgumentParser(description='Simulate deployed dance -> native C++ stopping core -> ten seconds of independently scored quiet standing.')
 parser.add_argument('--training-root', type=Path, required=True)
 parser.add_argument('--yaw', type=float, default=0.0)
@@ -21,6 +21,7 @@ args = parser.parse_args()
 if args.onnxruntime_site:
     sys.path.append(str(args.onnxruntime_site))
 import onnxruntime as ort
+ort.disable_telemetry_events()
 torch.set_num_threads(1)
 
 def hook(context):
@@ -38,6 +39,11 @@ def hook(context):
     kd = np.array(cfg['damping'])
     standkp = np.array(finish_cfg['stand_stiffness'])
     standkd = np.array(finish_cfg['stand_damping'])
+    stand_pose = np.array(finish_cfg['stand_pose'])
+    canonical = context['cfg']['controllers']['pd_stand']
+    assert np.array_equal(stand_pose, [canonical['init_state'][canonical['joint_list'].index(n)] for n in names])
+    assert np.array_equal(standkp, [canonical['stiffness'][canonical['joint_list'].index(n)] for n in names])
+    assert np.array_equal(standkd, [canonical['damping'][canonical['joint_list'].index(n)] for n in names])
     source_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (control/'include/control_module/dance_finish_core.h', control/'test/dance_finish_capi.cc', control/'policy'/Path(cfg['onnx_conf']['policy_file']).name)}
     options = ort.SessionOptions()
     options.intra_op_num_threads = 1
@@ -58,7 +64,7 @@ def hook(context):
     lib.dance_finish_reason.restype = ctypes.c_char_p
     lib.dance_finish_destroy.argtypes = [ctypes.c_void_p]
     legs = np.array([names.index(side + '_' + joint + '_joint') for side in ('left', 'right') for joint in ('hip_pitch', 'hip_roll', 'hip_yaw', 'knee_pitch', 'ankle_pitch', 'ankle_roll')], np.int32)
-    joints = np.r_[context['lower'], context['upper'], default, kp, kd, standkp, standkd].astype(np.float64)
+    joints = np.r_[context['lower'], context['upper'], default, kp, kd, standkp, standkd, stand_pose].astype(np.float64)
     core = lib.dance_finish_create(params, joints, legs)
     assert core
     assert lib.dance_finish_begin(core, context['target'].copy().astype(np.float64), 1000000000)
@@ -78,7 +84,7 @@ def hook(context):
     minz = 10.0
     passed = False
     rng = np.random.default_rng(args.noise_seed) if args.noise_seed is not None else None
-    for tick in range(30001):
+    for tick in range(45001):
         mujoco.mj_forward(model, data)
         t = tick * 0.001
         q = data.qpos[qadr].copy()
@@ -119,7 +125,7 @@ def hook(context):
             for foot in context['feet']:
                 if 0 in b and foot in b:
                     truefeet.add(foot)
-        quiet_truth = tilt < 10 and np.linalg.norm(data.qvel[:3]) < 0.05 and (np.linalg.norm(data.qvel[3:6]) < 0.2) and (np.max(np.abs(data.qvel[vadr])) < 0.5) and (len(truefeet) == 2)
+        quiet_truth = tilt < 10 and np.linalg.norm(data.qvel[:3]) < 0.05 and (np.linalg.norm(data.qvel[3:6]) < 0.2) and (np.max(np.abs(data.qvel[vadr])) < 0.5) and (len(truefeet) == 2) and np.max(np.abs(data.qpos[qadr]-stand_pose)) <= finish_cfg['max_stand_pose_error']
         if quiet_truth and confirmed:
             if stable_since is None:
                 stable_since = t
@@ -147,7 +153,7 @@ def hook(context):
             break
         data.ctrl[act] = np.clip(output[29:58] * (output[:29] - data.qpos[qadr]) - output[58:87] * data.qvel[vadr], -context['effort'], context['effort'])
         mujoco.mj_step(model, data)
-    result = dict(parameters={k:finish_cfg[k] for k in PARAMETER_KEYS}, source_sha256=source_hashes, versions=dict(numpy=np.__version__,torch=torch.__version__,mujoco=mujoco.__version__,onnxruntime=ort.__version__), quiet_xy_drift_m=float(np.linalg.norm(data.qpos[:2]-quiet_origin)) if quiet_origin is not None else None, passed=bool(passed), yaw=args.yaw, noise_seed=args.noise_seed, push_N=args.push, elapsed_s=t, first_confirmed_s=first_confirmed, final_phase=phase, final_reason=reason, max_tilt_deg=postmax, min_z_m=minz, final_true_speed=float(np.linalg.norm(data.qvel[:3])), final_true_gyro=float(np.linalg.norm(data.qvel[3:6])), final_max_joint_speed=float(np.max(np.abs(data.qvel[vadr]))), continuous_verified_quiet_s=t - stable_since if stable_since is not None else 0, recoveries=float(output[98]), events=events, samples=samples)
+    result = dict(final_stand_pose_error_rad=float(np.max(np.abs(data.qpos[qadr]-stand_pose))), stand_pose=stand_pose.tolist(), parameters={k:finish_cfg[k] for k in PARAMETER_KEYS}, source_sha256=source_hashes, versions=dict(numpy=np.__version__,torch=torch.__version__,mujoco=mujoco.__version__,onnxruntime=ort.__version__), quiet_xy_drift_m=float(np.linalg.norm(data.qpos[:2]-quiet_origin)) if quiet_origin is not None else None, passed=bool(passed), yaw=args.yaw, noise_seed=args.noise_seed, push_N=args.push, elapsed_s=t, first_confirmed_s=first_confirmed, final_phase=phase, final_reason=reason, max_tilt_deg=postmax, min_z_m=minz, final_true_speed=float(np.linalg.norm(data.qvel[:3])), final_true_gyro=float(np.linalg.norm(data.qvel[3:6])), final_max_joint_speed=float(np.max(np.abs(data.qvel[vadr]))), continuous_verified_quiet_s=t - stable_since if stable_since is not None else 0, recoveries=float(output[98]), events=events, samples=samples)
     lib.dance_finish_destroy(core)
     tmp.cleanup()
     return result
