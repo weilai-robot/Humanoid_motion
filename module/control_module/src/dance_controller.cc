@@ -670,6 +670,28 @@ std::vector<double> DanceController::PreparationPositions() const {
   return std::vector<double>(preparation_pos_.begin(), preparation_pos_.end());
 }
 
+std::vector<double> DanceController::HandoffTargets() const {
+  if (!finished_ || faulted_) throw std::runtime_error("dance handoff requires normal playback completion");
+  std::vector<double> result(kJoints);
+  for (int i = 0; i < kJoints; ++i) result[i] = joint_sign_[i]*target_pos_[i];
+  return result;
+}
+
+void DanceController::ValidateFinisher(const YAML::Node& cfg) const {
+  const auto names = cfg["joint_list"].as<std::vector<std::string>>();
+  const auto p = cfg["stiffness"].as<std::vector<double>>();
+  const auto d = cfg["damping"].as<std::vector<double>>();
+  const auto nominal = cfg["init_state"].as<std::vector<double>>();
+  if (!use_imu_only_ || names != joint_names_ || p.size() != kJoints || d.size() != kJoints || nominal.size() != kJoints)
+    throw std::runtime_error("finisher requires the 154-input dance and matching 29-joint order");
+  for (int i = 0; i < kJoints; ++i) {
+    if (!std::isfinite(p[i]) || !std::isfinite(d[i]) || !std::isfinite(nominal[i]) ||
+        joint_sign_[i] != 1 || std::abs(p[i]-kp_[i]) > 1e-5 || std::abs(d[i]-kd_[i]) > 1e-5 ||
+        std::abs(nominal[i]-default_pos_[i]) > 1e-4)
+      throw std::runtime_error("dance/finisher coordinates or nominal PD/default pose mismatch");
+  }
+}
+
 void DanceController::RestartController() {
   Snapshot snapshot;
   const char* reason = nullptr;

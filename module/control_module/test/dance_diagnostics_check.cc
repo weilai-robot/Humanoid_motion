@@ -97,6 +97,19 @@ int main() {
     Check(i < short_columns.size() && std::stod(short_row[i]) == pair.second, "154-input field boundaries retained");
   }
   Check(!logger.Start(root.string(), joints, 10, 16, 155), "unknown observation dimension rejected");
+  Check(logger.Start(root.string(), joints, 10, 16, 0), "finishing telemetry without actor inputs starts");
+  frame.values[D::kTarget] = 0.75;
+  Check(logger.Enqueue(frame), "finishing sample enqueues"); logger.Stop();
+  std::ifstream finish_file(logger.Path());
+  Check(bool(std::getline(finish_file, line)), "finishing header");
+  const auto finish_columns = Split(line);
+  Check(finish_columns == D::Columns(joints, 0) && finish_columns.size() == columns.size()-320,
+        "finishing schema omits both observation arrays");
+  Check(bool(std::getline(finish_file, line)), "finishing row");
+  const auto finish_row = Split(line);
+  Check(finish_row.size() == finish_columns.size(), "finishing row/schema widths agree");
+  const auto target_index = std::find(finish_columns.begin(), finish_columns.end(), "target_policy_joint_0")-finish_columns.begin();
+  Check(std::stod(finish_row[target_index]) == 0.75, "finishing target offset survives omitted observations");
   std::ofstream(root/"not_a_directory") << "test";
   Check(!logger.Start((root/"not_a_directory"/"child").string(), joints), "unwritable path must fail cleanly");
   Check(!logger.Start(root.string(), joints, 0), "invalid flush interval rejected");

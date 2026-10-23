@@ -14,6 +14,8 @@
 #include "control_module/controller_base.h"
 #include "control_module/data_file_logger.h"
 #include "control_module/rotation_tools.h"
+#include "control_module/dance_finish_core.h"
+#include "control_module/dance_diagnostics.h"
 
 namespace xyber_x1_infer::rl_control_module {
 
@@ -27,6 +29,16 @@ class RLController : public ControllerBase {
 
   void Update() override;
   my_ros2_proto::msg::JointCommand GetJointCmdData() override;
+  void SetImuData(const sensor_msgs::msg::Imu imu_data) override;
+  void SetJointStateData(const sensor_msgs::msg::JointState joint_state_data,
+                       const std::unordered_map<std::string, int>& index) override;
+  bool IsDanceFinisher() const { return static_cast<bool>(finish_core_); }
+  bool FinishStandingConfirmed() const { return finish_core_ && finish_core_->StandingConfirmed(); }
+  bool FinishRecovering() const { return finish_core_ &&
+      (finish_core_->GetPhase() == DanceFinishCore::Phase::kBrake ||
+       finish_core_->GetPhase() == DanceFinishCore::Phase::kLand); }
+  void PrepareDanceHandoff(const std::vector<double>& targets);
+  void StopDanceFinishDiagnostics() { finish_diagnostics_.Stop(); }
 
   void SetLoggingActive(bool active);
   void StopLoggingWorker();
@@ -39,6 +51,8 @@ class RLController : public ControllerBase {
   void UpdateStateEstimation();
   void ComputeObservation();
   void ComputeActions();
+  void UpdateDanceFinish();
+  void LogDanceFinish(const my_ros2_proto::msg::JointCommand& command);
   void StartLoggingWorker();
   void LoggingWorkerLoop();
   void DrainDiagBuffer();
@@ -111,6 +125,18 @@ class RLController : public ControllerBase {
   int amp_transition_elapsed_{0};
   vector_t amp_transition_start_pos_;
   std::atomic_bool amp_fault_{false};
+  std::unique_ptr<DanceFinishCore> finish_core_;
+  DanceFinishCore::Joints finish_start_targets_{};
+  bool finish_pending_{false};
+  std::mutex finish_feedback_mutex_;
+  int64_t finish_joint_source_ns_{}, finish_imu_source_ns_{};  // feedback mutex
+  bool finish_effort_valid_{false};
+  int64_t finish_joint_snapshot_ns_{}, finish_imu_snapshot_ns_{};  // control thread
+  bool finish_effort_snapshot_valid_{false};
+  DanceDiagnostics finish_diagnostics_;
+  uint64_t finish_tick_{}, finish_session_{};
+  DanceFinishCore::Phase finish_logged_phase_{DanceFinishCore::Phase::kInactive};
+  bool finish_logged_confirmed_{};
 
   std::unique_ptr<Ort::Session> session_ptr_;
   Ort::MemoryInfo memory_info_;

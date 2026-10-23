@@ -21,6 +21,18 @@ constexpr auto kLogWorkerPollInterval = std::chrono::milliseconds(1);
 constexpr auto kLogIdleTimeout = std::chrono::milliseconds(500);
 constexpr auto kLogFlushInterval = std::chrono::milliseconds(200);
 
+int64_t FinishStampNs(const builtin_interfaces::msg::Time& stamp) {
+  if (stamp.sec < 0 || stamp.nanosec >= 1000000000u) return 0;
+  return int64_t(stamp.sec)*1000000000LL+stamp.nanosec;
+}
+bool FinishStampFresh(int64_t source, bool simulation) {
+  if (source <= 0) return false;
+  if (simulation) return true;
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  return now-source >= -20000000LL && now-source <= 80000000LL;
+}
+
 bool IsLegActuator(const std::string& name) {
   return name.find("_hip_") != std::string::npos ||
          name.find("_knee_") != std::string::npos ||
@@ -53,6 +65,7 @@ RLController::RLController(bool use_sim_handles)
       memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)) {}
 
 RLController::~RLController() {
+  finish_diagnostics_.Stop();
   StopLoggingWorker();
 }
 
@@ -203,6 +216,49 @@ void RLController::Init(const YAML::Node& cfg_node) {
   lpf_conf_.effort_enabled = cfg_node["lpf_conf"]["effort_enabled"]
                                  ? cfg_node["lpf_conf"]["effort_enabled"].as<bool>() : default_lpf;
 
+  if (const auto finish = cfg_node["dance_finish"]; finish && finish["enabled"].as<bool>()) {
+    AIMRT_CHECK_ERROR_THROW(amp_mode_ && amp_conf_.use_constant_cmd && amp_conf_.const_cmd_x == 0 &&
+        amp_conf_.const_cmd_y == 0 && amp_conf_.const_cmd_z == 0 && amp_conf_.settle_ticks == 0 &&
+        amp_conf_.sensor_timeout_ms <= 80 && !lpf_conf_.position_enabled && !lpf_conf_.effort_enabled,
+        "dance finisher requires zero-command AMP, no settle/LPF, and <=80 ms feedback timeout");
+    DanceFinishCore::Config c;
+    const std::vector<std::pair<const char*, double*>> fields{
+      {"blend_s", &c.blend_s}, {"upper_delay_s", &c.upper_delay_s}, {"upper_blend_s", &c.upper_blend_s},
+      {"landing_min_s", &c.landing_min_s}, {"landing_hold_s", &c.landing_hold_s},
+      {"stand_blend_s", &c.stand_blend_s}, {"verify_s", &c.verify_s},
+      {"max_tilt_deg", &c.max_tilt_deg}, {"quiet_tilt_deg", &c.quiet_tilt_deg},
+      {"quiet_gyro", &c.quiet_gyro}, {"quiet_joint_speed", &c.quiet_joint_speed},
+      {"quiet_base_speed", &c.quiet_base_speed}, {"contact_on", &c.contact_on}, {"contact_off", &c.contact_off},
+      {"max_foot_height_delta", &c.max_foot_height_delta}, {"max_foot_velocity_delta", &c.max_foot_velocity_delta},
+      {"recovery_tilt_deg", &c.recovery_tilt_deg}, {"recovery_gyro", &c.recovery_gyro},
+      {"recovery_speed", &c.recovery_speed}, {"recovery_delay_s", &c.recovery_delay_s},
+      {"upper_target_speed", &c.upper_target_speed}, {"force_filter_s", &c.force_filter_s}};
+    for (const auto& [key, value] : fields) if (finish[key]) *value = finish[key].as<double>();
+    AIMRT_CHECK_ERROR_THROW(c.max_tilt_deg == amp_conf_.max_tilt_deg, "finish and AMP tilt limits must match");
+    const auto p = finish["stand_stiffness"].as<std::vector<double>>();
+    const auto d = finish["stand_damping"].as<std::vector<double>>();
+    AIMRT_CHECK_ERROR_THROW(p.size() == 29 && d.size() == 29, "finish stand gains must cover 29 joints");
+    for (size_t i = 0; i < 29; ++i) {
+      c.lower[i] = joint_conf_.pos_limit_lower(i); c.upper[i] = joint_conf_.pos_limit_upper(i);
+      c.nominal[i] = joint_conf_.init_state(i); c.kp[i] = joint_conf_.stiffness(i); c.kd[i] = joint_conf_.damping(i);
+      c.stand_kp[i] = p[i]; c.stand_kd[i] = d[i];
+    }
+    for (size_t i = 0; i < 12; ++i) {
+      const auto j = std::find(joint_names_.begin(), joint_names_.end(), kDanceLegJointNames[i]);
+      AIMRT_CHECK_ERROR_THROW(j != joint_names_.end(), "finish is missing a leg joint");
+      c.legs[i] = std::distance(joint_names_.begin(), j);
+    }
+    finish_core_ = std::make_unique<DanceFinishCore>(c);
+    const auto diag = finish["diagnostics"];
+    if (!diag || diag["enabled"].as<bool>(true)) {
+      const auto directory = diag ? diag["directory"].as<std::string>("test_logs/data_csv") : "test_logs/data_csv";
+      if (finish_diagnostics_.Start(directory, joint_names_, 100, 256, 0)) {
+        std::ofstream snapshot(finish_diagnostics_.Path()+".yaml"); snapshot << cfg_node << '\n';
+        AIMRT_INFO("Dance finish diagnostics: {} (observation_dim=0; AMP inputs use tm_obs_input)", finish_diagnostics_.Path());
+      }
+    }
+  }
+
   LoadModel();
 
   diag_log_dir_ = "test_logs/data_csv";
@@ -256,6 +312,10 @@ void RLController::Init(const YAML::Node& cfg_node) {
 }
 
 void RLController::RestartController() {
+  if (finish_core_ && !finish_pending_) {
+    AIMRT_CHECK_ERROR_THROW(finish_core_->Active(), "dance finisher requires a normal dance handoff");
+    return;  // finish <-> stand changes preserve the active controller and its captured stance.
+  }
   is_first_frame_ = true;
   diag_pending_frame_ = false;
   if (amp_mode_) {
@@ -271,6 +331,56 @@ void RLController::RestartController() {
       amp_transition_start_pos_(ii) = joint_state_data_.position[ii];
     }
   }
+  if (finish_core_) {
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    finish_core_->Begin(finish_start_targets_, now);
+    finish_pending_ = false; finish_tick_ = 0; ++finish_session_;
+    finish_logged_phase_ = DanceFinishCore::Phase::kInactive; finish_logged_confirmed_ = false;
+  }
+}
+
+void RLController::PrepareDanceHandoff(const std::vector<double>& targets) {
+  AIMRT_CHECK_ERROR_THROW(finish_core_ && targets.size() == 29, "invalid dance finish handoff");
+  std::copy(targets.begin(), targets.end(), finish_start_targets_.begin());
+  finish_pending_ = true;
+}
+
+void RLController::SetImuData(const sensor_msgs::msg::Imu value) {
+  if (!finish_core_) { ControllerBase::SetImuData(value); return; }
+  std::lock_guard<std::mutex> guard(finish_feedback_mutex_);
+  const auto stamp = FinishStampNs(value.header.stamp);
+  const auto& q = value.orientation;
+  const double norm = q.w*q.w+q.x*q.x+q.y*q.y+q.z*q.z;
+  if (!FinishStampFresh(stamp, use_sim_handles_) || stamp <= finish_imu_source_ns_ ||
+      !std::isfinite(norm) || norm < 0.81 || norm > 1.21 ||
+      !std::isfinite(value.angular_velocity.x) || !std::isfinite(value.angular_velocity.y) ||
+      !std::isfinite(value.angular_velocity.z)) return;
+  ControllerBase::SetImuData(value); finish_imu_source_ns_ = stamp;
+}
+
+void RLController::SetJointStateData(sensor_msgs::msg::JointState value,
+                                    const std::unordered_map<std::string, int>& index) {
+  if (!finish_core_) { ControllerBase::SetJointStateData(value, index); return; }
+  std::lock_guard<std::mutex> guard(finish_feedback_mutex_);
+  const auto stamp = FinishStampNs(value.header.stamp);
+  if (!FinishStampFresh(stamp, use_sim_handles_) || stamp <= finish_joint_source_ns_) return;
+  bool effort_valid = true;
+  for (const auto& name : joint_names_) {
+    const auto it = index.find(name);
+    if (it == index.end() || it->second < 0) return;
+    const auto i = static_cast<size_t>(it->second);
+    const bool leg = IsLegActuator(name);
+    if (i >= value.name.size() || value.name[i] != name || i >= value.position.size() ||
+        i >= value.velocity.size() || !std::isfinite(value.position[i]) || !std::isfinite(value.velocity[i])) return;
+    if (leg && (i >= value.effort.size() || !std::isfinite(value.effort[i]))) effort_valid = false;
+  }
+  // Zero-command balance needs q/qd/IMU, not torque. Missing leg torque only
+  // prevents quiet-support certification and static capture; never freeze a
+  // moving robot merely because a contact cue is unavailable.
+  value.effort.resize(value.name.size(), 0.0);
+  ControllerBase::SetJointStateData(value, index);
+  finish_joint_source_ns_ = stamp; finish_effort_valid_ = effort_valid;
 }
 
 bool RLController::AmpReady() const {
@@ -365,6 +475,8 @@ void RLController::LoggingWorkerLoop() {
 }
 
 void RLController::Update() {
+  std::unique_lock<std::mutex> finish_lock;
+  if (finish_core_) finish_lock = std::unique_lock<std::mutex>(finish_feedback_mutex_);
   if (amp_mode_ && !AmpReady()) {
     amp_fault_.store(true, std::memory_order_release);
     std::fill(actions_.begin(), actions_.end(), 0.0f);
@@ -372,6 +484,15 @@ void RLController::Update() {
     return;
   }
   UpdateStateEstimation();
+  if (finish_core_) {
+    finish_joint_snapshot_ns_ = finish_joint_source_ns_; finish_imu_snapshot_ns_ = finish_imu_source_ns_;
+    finish_effort_snapshot_valid_ = finish_effort_valid_;
+    if (!finish_core_->Active() || !FinishStampFresh(finish_joint_snapshot_ns_, use_sim_handles_) ||
+        !FinishStampFresh(finish_imu_snapshot_ns_, use_sim_handles_)) {
+      amp_fault_.store(true, std::memory_order_release); return;
+    }
+    finish_lock.unlock();
+  }
   if (amp_mode_ && propri_.projected_gravity.z() >
                        -std::cos(amp_conf_.max_tilt_deg * M_PI / 180.0)) {
     amp_fault_.store(true, std::memory_order_release);
@@ -409,7 +530,74 @@ void RLController::Update() {
     }
   }
 
+  if (finish_core_ && !AmpFaulted()) UpdateDanceFinish();
   loop_count_++;
+}
+
+void RLController::UpdateDanceFinish() {
+  DanceFinishCore::Input in;
+  DanceFinishCore::Joints proposed;
+  for (size_t i = 0; i < 29; ++i) {
+    in.q[i] = propri_.joint_pos(i); in.qd[i] = propri_.joint_vel(i); in.effort[i] = propri_.joint_effort(i);
+    proposed[i] = std::clamp(joint_conf_.init_state(i)+walk_step_conf_.action_scale*actions_[i],
+                            joint_conf_.pos_limit_lower(i), joint_conf_.pos_limit_upper(i));
+  }
+  const auto& q = propri_.imu_quat;
+  in.orientation = {q.w(), q.x(), q.y(), q.z()};
+  in.gyro = {propri_.base_ang_vel.x(), propri_.base_ang_vel.y(), propri_.base_ang_vel.z()};
+  in.source_ns = std::min(finish_joint_snapshot_ns_, finish_imu_snapshot_ns_);
+  in.contact_input_valid = finish_effort_snapshot_valid_ &&
+      std::abs(finish_joint_snapshot_ns_-finish_imu_snapshot_ns_) <= 10000000;
+  const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  finish_core_->Update(in, proposed, now); ++finish_tick_;
+  if (finish_core_->Faulted()) {
+    amp_fault_.store(true, std::memory_order_release);
+    AIMRT_ERROR("Dance finish fault: {}", finish_core_->Reason());
+  }
+}
+
+void RLController::LogDanceFinish(const my_ros2_proto::msg::JointCommand& command) {
+  const auto phase = finish_core_->GetPhase();
+  const bool confirmed = finish_core_->StandingConfirmed();
+  const bool changed = phase != finish_logged_phase_ || confirmed != finish_logged_confirmed_;
+  if (changed) AIMRT_INFO("Dance finish phase={} confirmed={} quiet_s={:.3f} recoveries={} reason={}",
+      finish_core_->PhaseName(), confirmed, finish_core_->QuietSeconds(), finish_core_->Recoveries(), finish_core_->Reason());
+  if (finish_diagnostics_.Enabled() && (changed || finish_tick_%20 == 0)) {
+    using D = DanceDiagnostics;
+    D::Frame f; D::Stamp(f);
+    f.tick = finish_tick_; f.session = finish_session_;
+    f.joint_stamp_ns = finish_joint_snapshot_ns_; f.imu_stamp_ns = finish_imu_snapshot_ns_;
+    f.velocity_stamp_ns = std::min(f.joint_stamp_ns, f.imu_stamp_ns);
+    f.snapshot_valid = f.has_action = f.command_valid = true;
+    D::Text(f.state, finish_core_->PhaseName()); D::Text(f.event, changed ? "finish_phase" : "finish_sample");
+    D::Text(f.reason, finish_core_->Reason()); D::Text(f.state_source, "foot_kinematics");
+    const auto& q = propri_.imu_quat;
+    const auto v = finish_core_->Velocity();
+    const vector3_t velocity = q.conjugate()*vector3_t(v[0], v[1], v[2]);
+    const std::array<double, 4> quaternion{q.w(), q.x(), q.y(), q.z()};
+    for (size_t i = 0; i < 4; ++i) f.values[D::kImuQuat+i] = quaternion[i];
+    for (size_t i = 0; i < 3; ++i) {
+      f.values[D::kImuGyro+i] = propri_.base_ang_vel(i);
+      f.values[D::kImuAccel+i] = propri_.imu_accel(i);
+      if (finish_core_->Contacts()[0] && finish_core_->Contacts()[1]) f.values[D::kBodyVelocity+i] = velocity(i);
+    }
+    for (size_t i = 0; i < 2; ++i) {
+      f.values[D::kContactForce+i] = finish_core_->Forces()[i];
+      f.values[D::kContact+i] = finish_core_->Contacts()[i];
+    }
+    for (size_t i = 0; i < 29; ++i) {
+      f.values[D::kJointPosition+i] = propri_.joint_pos(i);
+      f.values[D::kJointVelocity+i] = propri_.joint_vel(i);
+      f.values[D::kJointEffort+i] = propri_.joint_effort(i);
+      f.values[D::kAction+i] = actions_[i]; f.values[D::kTarget+i] = finish_core_->Targets()[i];
+      f.values[D::kCommandPosition+i] = command.position[i];
+      f.values[D::kCommandEffort+i] = command.effort[i];
+      f.values[D::kCommandKp+i] = command.stiffness[i]; f.values[D::kCommandKd+i] = command.damping[i];
+    }
+    finish_diagnostics_.Enqueue(f);
+  }
+  finish_logged_phase_ = phase; finish_logged_confirmed_ = confirmed;
 }
 
 my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
@@ -440,8 +628,9 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
     if (amp_mode_) {
       pos_des = std::clamp(pos_des, joint_conf_.pos_limit_lower(ii), joint_conf_.pos_limit_upper(ii));
     }
-    const double stiffness = joint_conf_.stiffness(ii);
-    const double damping = joint_conf_.damping(ii);
+    if (finish_core_) pos_des = finish_core_->Targets()[ii];
+    const double stiffness = finish_core_ ? finish_core_->Kp()[ii] : joint_conf_.stiffness(ii);
+    const double damping = finish_core_ ? finish_core_->Kd()[ii] : joint_conf_.damping(ii);
     pd_pos_des_raw_[ii] = pos_des_raw;
     pd_pos_des_lpf_[ii] = std::numeric_limits<double>::quiet_NaN();
     pd_tau_des_raw_[ii] = std::numeric_limits<double>::quiet_NaN();
@@ -482,6 +671,8 @@ my_ros2_proto::msg::JointCommand RLController::GetJointCmdData() {
     (void)EnqueueDiagFrame();
     diag_pending_frame_ = false;
   }
+
+  if (finish_core_) LogDanceFinish(joint_cmd);
 
   return joint_cmd;
 }

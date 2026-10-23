@@ -123,6 +123,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
             const bool policy_exit = (state_machine_.GetCurrentState() == "walk_amp" ||
                                       state_machine_.GetCurrentState() == "dance_ready" ||
                                       state_machine_.GetCurrentState() == "dance_x1" ||
+                                      state_machine_.GetCurrentState() == "dance_finish" ||
+                                      state_machine_.GetCurrentState() == "dance_stand" ||
                                       (dance_deployment_ && (state_machine_.GetCurrentState() == "zero" ||
                                                              state_machine_.GetCurrentState() == "stand"))) &&
                                   (trigger_topic == "/keep_mode" || trigger_topic == "/idle_mode");
@@ -176,6 +178,16 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
       const auto dance_controller = controller_map_.find("dance_x1");
       if (dance_controller != controller_map_.end()) {
         const auto dance = std::dynamic_pointer_cast<DanceController>(dance_controller->second);
+        if (const auto stop = controller_map_.find("rl_dance_finish"); stop != controller_map_.end()) {
+          const auto finisher = std::dynamic_pointer_cast<RLController>(stop->second);
+          AIMRT_CHECK_ERROR_THROW(finisher && finisher->IsDanceFinisher(), "invalid dedicated dance finisher");
+          dance->ValidateFinisher(cfg_node["controllers"]["rl_dance_finish"]);
+          for (const auto& state : {"dance_finish", "dance_stand"})
+            AIMRT_CHECK_ERROR_THROW(cfg_node["robot_states"][state]["internal_trigger"].as<bool>() &&
+                cfg_node["robot_states"][state]["trigger_topic"].as<std::string>() == std::string("/")+state &&
+                cfg_node["robot_states"][state]["controllers"].as<std::vector<std::string>>() ==
+                  std::vector<std::string>{"rl_dance_finish"}, "finish states must use only the dedicated finisher");
+        }
         if (dance->DiagnosticsEnabled()) AIMRT_INFO("Dance diagnostics: {}", dance->DiagnosticPath());
         else AIMRT_WARN("Dance diagnostics disabled or file worker could not start");
         const auto all_joints = cfg_node["joint_list"].as<std::vector<std::string>>();
@@ -423,6 +435,9 @@ void ControlModule::Shutdown() {
   }
   // Serialize with all diagnostic producers before draining the file worker.
   std::lock_guard<std::mutex> control_lock(control_loop_mutex_);
+  for (const auto& [name, controller] : controller_map_) {
+    if (const auto rl = std::dynamic_pointer_cast<RLController>(controller)) rl->StopDanceFinishDiagnostics();
+  }
   if (const auto it = controller_map_.find("dance_x1"); it != controller_map_.end()) {
     const auto dance = std::dynamic_pointer_cast<DanceController>(it->second);
     dance->SetDiagnosticState("shutdown");
@@ -513,6 +528,16 @@ bool ControlModule::MainLoop() {
           }
         }
         auto controller_names = state_machine_.GetCurrentControllerNames();
+        bool finish_handoff = false;
+        const auto compose = [this, &cmd_msg](const my_ros2_proto::msg::JointCommand& command) {
+          for (size_t i = 0; i < command.name.size(); ++i) {
+            const int index = joint_cmd_index_map_.at(command.name[i]);
+            cmd_msg.name[index] = command.name[i];
+            cmd_msg.position[index] = command.position[i]+joint_offset_map_.at(command.name[i]);
+            cmd_msg.velocity[index] = command.velocity[i]; cmd_msg.effort[index] = command.effort[i];
+            cmd_msg.stiffness[index] = command.stiffness[i]; cmd_msg.damping[index] = command.damping[i];
+          }
+        };
         for (const auto& name : controller_names) {
           const auto& controller = controller_map_.at(name);
           controller->Update();
@@ -538,8 +563,29 @@ bool ControlModule::MainLoop() {
             policy_stopped = true;
             break;
           }
+          if (amp && amp->IsDanceFinisher()) {
+            if (state_machine_.GetCurrentState() == "dance_finish" && amp->FinishStandingConfirmed() &&
+                state_machine_.OnEvent("/dance_stand")) {
+              RestartCurrentState();
+              AIMRT_INFO("Dance stopping complete: continuous quiet double support verified; monitored standing remains active");
+            } else if (state_machine_.GetCurrentState() == "dance_stand" && amp->FinishRecovering() &&
+                       state_machine_.OnEvent("/dance_finish")) {
+              RestartCurrentState();
+              AIMRT_WARN("Dance standing disturbed: resuming zero-command balance recovery");
+            }
+          }
           const auto dance = std::dynamic_pointer_cast<DanceController>(controller);
           if (dance && (dance->Faulted() || dance->Finished())) {
+            const auto stop = controller_map_.find("rl_dance_finish");
+            if (dance->Finished() && !dance->Faulted() && stop != controller_map_.end()) {
+              const auto finisher = std::dynamic_pointer_cast<RLController>(stop->second);
+              finisher->PrepareDanceHandoff(dance->HandoffTargets());
+              if (state_machine_.OnEvent("/dance_finish")) {
+                RestartCurrentState(); finish_handoff = true;
+                AIMRT_INFO("Dance reference finished: braking and landing with zero-command balance controller");
+                break;
+              }
+            }
             policy_stopped = true;
             if (dance->Faulted()) AIMRT_ERROR("Dance fault: {}", dance->FaultReason());
             else AIMRT_INFO("Dance motion completed; switching to keep mode");
@@ -556,6 +602,12 @@ bool ControlModule::MainLoop() {
             cmd_msg.damping[index] = tmp_cmd.damping[ii];
             cmd_msg.stiffness[index] = tmp_cmd.stiffness[ii];
           }
+        }
+        if (finish_handoff) {
+          const auto finisher = std::dynamic_pointer_cast<RLController>(controller_map_.at("rl_dance_finish"));
+          finisher->Update();
+          if (finisher->AmpFaulted()) policy_stopped = true;
+          else compose(finisher->GetJointCmdData());
         }
         if (policy_stopped) {
           // Stop applying a stale/nonfinite policy output. The keep controller

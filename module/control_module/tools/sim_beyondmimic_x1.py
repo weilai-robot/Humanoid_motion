@@ -35,7 +35,7 @@ def load_yaml(path):
 
 def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: float,
         candidate: str = "configured", state_feedback=None, estimator_parameters=None,
-        estimator_noise_seed=None, config_path=None) -> dict:
+        estimator_noise_seed=None, config_path=None, postroll_hook=None) -> dict:
     control = Path(__file__).resolve().parents[1]
     cfg = load_yaml(config_path or control / "cfg/rl_x1_dance.yaml")
     conf = cfg["controllers"]["dance_x1"]
@@ -419,6 +419,8 @@ def run(training_root: Path, stand_hold_s: float, yaw: float, ready_timeout_s: f
             "max_anchor_error_m": max(anchor_errors) if anchor_errors else None,
             "max_target_error_rad": max_target_error, "max_action": max_action,
             "max_measured_limit_violation_rad": max_limit_violation, "clipped_target_components": clip_count}
+    if postroll_hook is not None:
+        result["postroll"] = postroll_hook(locals())
     return finish(result)
 
 

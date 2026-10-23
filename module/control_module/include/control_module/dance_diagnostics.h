@@ -72,7 +72,7 @@ class DanceDiagnostics {
              int flush_ms = 100, size_t capacity = 256, size_t observation_dim = kObservations) {
     Stop();
     if (joints.size() != kJoints || flush_ms < 10 || flush_ms > 1000 || capacity < 2 ||
-        (observation_dim != 154 && observation_dim != 160)) return false;
+        (observation_dim != 0 && observation_dim != 154 && observation_dim != 160)) return false;
     observation_dim_ = observation_dim;
     try {
       std::filesystem::create_directories(directory);

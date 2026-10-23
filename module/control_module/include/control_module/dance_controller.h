@@ -51,6 +51,8 @@ class DanceController final : public ControllerBase {
   }
   bool Ready(const char** reason = nullptr) const;
   std::vector<double> PreparationPositions() const;
+  std::vector<double> HandoffTargets() const;
+  void ValidateFinisher(const YAML::Node& cfg) const;
   bool Faulted() const { return faulted_; }
   bool Finished() const { return finished_; }
   const std::string& FaultReason() const { return fault_reason_; }

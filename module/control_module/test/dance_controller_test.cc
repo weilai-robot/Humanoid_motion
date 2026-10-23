@@ -1,6 +1,7 @@
 #include "control_module/dance_controller.h"
 #include "control_module/dance_start_gate.h"
 #include "control_module/pd_controller.h"
+#include "control_module/rl_controller.h"
 #include "control_module/state_machine.h"
 
 #include <gtest/gtest.h>
@@ -45,6 +46,17 @@ YAML::Node Config154() {
   cfg["control_frequency_hz"] = root["control_frequecy"];
   cfg["model_file"] = (SourceDir()/"policy"/std::filesystem::path(cfg["model_file"].as<std::string>()).filename()).string();
   cfg["motion_file"] = (SourceDir()/"policy/dance_x1_motion.bin").string();
+  return cfg;
+}
+
+YAML::Node ConfigFinish() {
+  const auto root = YAML::LoadFile((SourceDir()/"cfg/rl_x1_dance.yaml").string());
+  auto cfg = YAML::Clone(root["controllers"]["rl_dance_finish"]);
+  cfg["joint_limits"] = root["joint_limits"];
+  cfg["control_frequency_hz"] = root["control_frequecy"];
+  cfg["dance_finish"]["diagnostics"]["enabled"] = false;
+  cfg["onnx_conf"]["policy_file"] = (SourceDir()/"policy"/
+      std::filesystem::path(cfg["onnx_conf"]["policy_file"].as<std::string>()).filename()).string();
   return cfg;
 }
 
@@ -114,6 +126,10 @@ struct Sample {
     controller.SetImuData(imu);
     controller.SetAnchorPose(anchor);
     controller.SetBaseVelocity(velocity);
+  }
+  void Send(RLController& controller) const {
+    controller.SetJointStateData(joint, index);
+    controller.SetImuData(imu);
   }
 };
 
@@ -235,6 +251,55 @@ TEST(DanceController, V12RejectsMismatchedModelLayoutAndStateSource) {
   cfg = Config(); cfg["model_file"] = (SourceDir() / "policy/dance_x1_v12_154_4999.bin").string();
   DanceController wrong_full_model(true);
   EXPECT_THROW(wrong_full_model.Init(cfg), std::runtime_error);
+}
+
+TEST(DanceController, FinisherRequiresMatchingDanceModelParametersAndZeroCommand) {
+  auto cfg = ConfigFinish();
+  DanceController dance(true); dance.Init(Config154());
+  EXPECT_NO_THROW(dance.ValidateFinisher(cfg));
+  cfg["stiffness"][0] = 1.0;
+  EXPECT_THROW(dance.ValidateFinisher(cfg), std::runtime_error);
+  cfg = ConfigFinish(); cfg["amp_conf"]["constant_cmd"][0] = 1.0;
+  RLController moving(true);
+  EXPECT_ANY_THROW(moving.Init(cfg));
+  cfg = ConfigFinish(); cfg["amp_conf"]["settle_ticks"] = 50;
+  RLController settling(true);
+  EXPECT_ANY_THROW(settling.Init(cfg));
+}
+
+TEST(DanceController, FinisherRequiresHandoffPreservesStandingTransitionsAndRejectsFrozenSources) {
+  const auto cfg = ConfigFinish();
+  RLController finisher(true); finisher.Init(cfg);
+  ASSERT_TRUE(finisher.IsDanceFinisher());
+  EXPECT_ANY_THROW(finisher.RestartController());
+  Sample sample(Config154()); sample.Send(finisher);
+  ASSERT_TRUE(finisher.AmpReady());
+  const auto names = cfg["joint_list"].as<std::vector<std::string>>();
+  std::vector<double> previous;
+  for (const auto& name : names) previous.push_back(sample.joint.position[sample.index.at(name)]);
+  finisher.PrepareDanceHandoff(previous); finisher.RestartController(); finisher.Update();
+  ASSERT_FALSE(finisher.AmpFaulted());
+  const auto first = finisher.GetJointCmdData();
+  ASSERT_EQ(first.name, names);
+  EXPECT_TRUE(finisher.FinishRecovering());
+  // State-only transitions must not reset balance history or command blending.
+  finisher.RestartController();
+  const auto continued = finisher.GetJointCmdData();
+  EXPECT_EQ(first.position, continued.position);
+  sample.joint.velocity[sample.index.at("left_ankle_pitch_joint")] = 100;
+  sample.Stamp(); sample.Send(finisher); finisher.Update();
+  ASSERT_FALSE(finisher.AmpFaulted());
+  const auto cmd = finisher.GetJointCmdData();
+  for (size_t i = 0; i < names.size(); ++i) {
+    if (names[i] == "left_ankle_pitch_joint") {
+      EXPECT_DOUBLE_EQ(cmd.stiffness[i], 0); EXPECT_DOUBLE_EQ(cmd.damping[i], 0);
+      EXPECT_DOUBLE_EQ(cmd.effort[i], -80);
+    }
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(90));
+  sample.Send(finisher);  // Identical source stamps cannot refresh receive age.
+  EXPECT_FALSE(finisher.AmpReady());
+  finisher.Update(); EXPECT_TRUE(finisher.AmpFaulted());
 }
 
 TEST(DanceController, V12NeedsOnlyImuAndEncodersAndMatchesIndependentCheckpoint) {
@@ -912,7 +977,7 @@ TEST(DanceController, ThreeButtonsSelectZeroStandAndGuidePreparationThenInternal
 TEST(DanceController, StopInterruptsEveryStageOfTheThreeButtonSequence) {
   const auto root = YAML::LoadFile((SourceDir() / "cfg/rl_x1_dance.yaml").string());
   const std::vector<std::string> events{
-      "/zero_mode", "/stand_mode", "/dance_start", "/dance_play"};
+      "/zero_mode", "/stand_mode", "/dance_start", "/dance_play", "/dance_finish", "/dance_stand"};
   for (const std::string stop : {"/keep_mode", "/idle_mode"}) {
     for (size_t stage = 1; stage <= events.size(); ++stage) {
       StateMachine machine;
@@ -926,6 +991,26 @@ TEST(DanceController, StopInterruptsEveryStageOfTheThreeButtonSequence) {
       EXPECT_EQ(machine.GetCurrentState(), "zero");
     }
   }
+}
+
+TEST(DanceController, CompletionUsesInternalFinishingAndMonitoredStandingWithRecovery) {
+  const auto root = YAML::LoadFile((SourceDir()/"cfg/rl_x1_dance.yaml").string());
+  for (const auto state : {"dance_finish", "dance_stand"})
+    ASSERT_TRUE(root["robot_states"][state]["internal_trigger"].as<bool>());
+  EXPECT_EQ(root["controllers"]["rl_dance_finish"]["amp_conf"]["constant_cmd"].as<std::vector<double>>(),
+            (std::vector<double>{0, 0, 0}));
+  StateMachine machine; machine.Init(root["robot_states"], "idle");
+  EXPECT_FALSE(machine.OnEvent("/dance_finish")); EXPECT_FALSE(machine.OnEvent("/dance_stand"));
+  for (const auto event : {"/zero_mode", "/stand_mode", "/dance_start", "/dance_play"}) ASSERT_TRUE(machine.OnEvent(event));
+  EXPECT_FALSE(machine.OnEvent("/dance_stand"));
+  ASSERT_TRUE(machine.OnEvent("/dance_finish"));
+  const auto controller = machine.GetCurrentControllerNames();
+  EXPECT_EQ(controller, (std::vector<std::string>{"rl_dance_finish"}));
+  EXPECT_FALSE(machine.OnEvent("/dance_finish")); EXPECT_FALSE(machine.OnEvent("/dance_start"));
+  ASSERT_TRUE(machine.OnEvent("/dance_stand")); EXPECT_EQ(controller, machine.GetCurrentControllerNames());
+  ASSERT_TRUE(machine.OnEvent("/dance_finish")); EXPECT_EQ(controller, machine.GetCurrentControllerNames());
+  ASSERT_TRUE(machine.OnEvent("/keep_mode"));
+  EXPECT_FALSE(machine.OnEvent("/dance_stand")); EXPECT_FALSE(machine.OnEvent("/dance_finish"));
 }
 
 TEST(DanceController, AcceptedGuideStartsAfterHoldWithoutAnotherButtonAndStopCancels) {

@@ -1,4 +1,4 @@
-# X1 BeyondMimic v11: identified PD, 160 observations, 29 actions.
+# X1 BeyondMimic v12: 154 observations, 29 actions; verified stopping phases after playback.
 # Dedicated dance configuration; regular AMP/joystick configurations are independent.
 control_frequecy: 1000
 use_sim_handles: false
@@ -21,15 +21,15 @@ pub_joint_cmd_name: /joint_cmd
 robot_states:
   idle:
     trigger_topic: /idle_mode
-    pre_states: [keep, zero, stand, dance_ready, dance_x1]
+    pre_states: [keep, zero, stand, dance_ready, dance_x1, dance_finish, dance_stand]
     controllers: [pd_idle]
   keep:
     trigger_topic: /keep_mode
-    pre_states: [idle, zero, stand, dance_ready, dance_x1]
+    pre_states: [idle, zero, stand, dance_ready, dance_x1, dance_finish, dance_stand]
     controllers: [pd_keep]
   zero:
     trigger_topic: /zero_mode
-    pre_states: [idle, keep, stand, dance_ready, dance_x1]
+    pre_states: [idle, keep, stand, dance_ready, dance_x1, dance_finish, dance_stand]
     controllers: [pd_zero]
   stand:
     trigger_topic: /stand_mode
@@ -44,6 +44,17 @@ robot_states:
     internal_trigger: true
     pre_states: [dance_ready]
     controllers: [dance_x1]
+
+  dance_finish:
+    trigger_topic: /dance_finish
+    internal_trigger: true
+    pre_states: [dance_x1, dance_stand]
+    controllers: [rl_dance_finish]
+  dance_stand:
+    trigger_topic: /dance_stand
+    internal_trigger: true
+    pre_states: [dance_finish]
+    controllers: [rl_dance_finish]
 
 joint_list:
   - lumbar_yaw_joint
@@ -386,3 +397,264 @@ controllers:
     # DCU already converts lumbar pitch into training coordinates (fb8cc78).
     # All 29 policy joints therefore use +1, including lumbar_pitch_joint.
     joint_sign: {}
+
+  # Dedicated zero-command AMP braking/landing, then gated monitored standing.
+  rl_dance_finish:
+    joint_list:
+    - left_hip_pitch_joint
+    - lumbar_yaw_joint
+    - right_hip_pitch_joint
+    - left_hip_roll_joint
+    - lumbar_roll_joint
+    - right_hip_roll_joint
+    - left_hip_yaw_joint
+    - lumbar_pitch_joint
+    - right_hip_yaw_joint
+    - left_knee_pitch_joint
+    - left_shoulder_pitch_joint
+    - right_shoulder_pitch_joint
+    - right_knee_pitch_joint
+    - left_ankle_pitch_joint
+    - left_shoulder_roll_joint
+    - right_shoulder_roll_joint
+    - right_ankle_pitch_joint
+    - left_ankle_roll_joint
+    - left_shoulder_yaw_joint
+    - right_shoulder_yaw_joint
+    - right_ankle_roll_joint
+    - left_elbow_pitch_joint
+    - right_elbow_pitch_joint
+    - left_elbow_yaw_joint
+    - right_elbow_yaw_joint
+    - left_wrist_pitch_joint
+    - right_wrist_pitch_joint
+    - left_wrist_roll_joint
+    - right_wrist_roll_joint
+    init_state:
+    - 0.48891
+    - 0.0
+    - -0.48891
+    - 0.06213
+    - 0.0
+    - -0.06213
+    - -0.33853
+    - 0.0
+    - 0.33853
+    - 0.63204
+    - 0.0
+    - 0.0
+    - 0.63204
+    - -0.27224
+    - 0.0
+    - 0.0
+    - -0.27224
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+    stiffness:
+    - 65.0
+    - 90.0
+    - 65.0
+    - 60.0
+    - 70.0
+    - 60.0
+    - 100.0
+    - 100.0
+    - 100.0
+    - 85.0
+    - 40.0
+    - 40.0
+    - 85.0
+    - 50.0
+    - 40.0
+    - 40.0
+    - 50.0
+    - 50.0
+    - 40.0
+    - 40.0
+    - 50.0
+    - 30.0
+    - 30.0
+    - 20.0
+    - 20.0
+    - 15.0
+    - 15.0
+    - 15.0
+    - 15.0
+    damping:
+    - 8.0
+    - 8.0
+    - 8.0
+    - 8.0
+    - 8.0
+    - 8.0
+    - 3.3
+    - 8.0
+    - 3.3
+    - 8.0
+    - 4.0
+    - 4.0
+    - 8.0
+    - 4.0
+    - 4.0
+    - 4.0
+    - 4.0
+    - 2.5
+    - 2.0
+    - 2.0
+    - 2.5
+    - 1.9
+    - 1.9
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    - 1.0
+    obs_layout: amp
+    amp_conf:
+      settle_ticks: 0
+      constant_cmd:
+      - 0.0
+      - 0.0
+      - 0.0
+      cmd_x_range:
+      - -0.5
+      - 2.5
+      cmd_y_range:
+      - -0.5
+      - 0.5
+      cmd_yaw_range:
+      - -1.5
+      - 1.5
+      sensor_timeout_ms: 80
+      cmd_timeout_ms: 250
+      max_tilt_deg: 35.0
+      ankle_effort_limit: 80.0
+    walk_step_conf:
+      action_scale: 0.25
+      decimation: 20
+      cycle_time: 1.0
+      sw_mode: false
+      cmd_threshold: 0.05
+    obs_scales:
+      lin_vel: 1.0
+      ang_vel: 1.0
+      dof_pos: 1.0
+      dof_vel: 1.0
+      quat: 1.0
+    onnx_conf:
+      policy_file: cfg/control_module/policy/x1_amp_v70b_m16000_50hz.onnx
+      actions_size: 29
+      observations_size: 96
+      num_hist: 3
+      observations_clip: 100.0
+      actions_clip: 100.0
+      inter_op_threads: 1
+      intra_op_threads: 1
+    lpf_conf:
+      position_enabled: false
+      effort_enabled: false
+      wc: 100.0
+      ts: 0.001
+      paralle_list:
+      - left_ankle_pitch_joint
+      - left_ankle_roll_joint
+      - right_ankle_pitch_joint
+      - right_ankle_roll_joint
+    dance_finish:
+      enabled: true
+      blend_s: 0.1
+      upper_delay_s: 1.0
+      upper_blend_s: 2.0
+      landing_min_s: 2.0
+      landing_hold_s: 0.75
+      stand_blend_s: 1.0
+      verify_s: 2.0
+      max_tilt_deg: 35.0
+      quiet_tilt_deg: 10.0
+      quiet_gyro: 0.1
+      quiet_joint_speed: 0.3
+      quiet_base_speed: 0.025
+      contact_on: 35.0
+      contact_off: 15.0
+      max_foot_height_delta: 0.03
+      max_foot_velocity_delta: 0.15
+      recovery_tilt_deg: 12.0
+      recovery_gyro: 0.3
+      recovery_speed: 0.12
+      recovery_delay_s: 0.05
+      upper_target_speed: 2.0
+      force_filter_s: 0.1
+      stand_stiffness:
+      - 300.0
+      - 500.0
+      - 300.0
+      - 300.0
+      - 500.0
+      - 300.0
+      - 300.0
+      - 500.0
+      - 300.0
+      - 300.0
+      - 80.0
+      - 80.0
+      - 300.0
+      - 300.0
+      - 80.0
+      - 80.0
+      - 300.0
+      - 300.0
+      - 80.0
+      - 80.0
+      - 300.0
+      - 80.0
+      - 80.0
+      - 80.0
+      - 80.0
+      - 80.0
+      - 80.0
+      - 80.0
+      - 80.0
+      stand_damping:
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 5.0
+      - 1.5
+      - 1.5
+      - 5.0
+      - 5.0
+      - 1.5
+      - 1.5
+      - 5.0
+      - 5.0
+      - 1.5
+      - 1.5
+      - 5.0
+      - 1.5
+      - 1.5
+      - 1.5
+      - 1.5
+      - 1.5
+      - 1.5
+      - 1.5
+      - 1.5
+      diagnostics:
+        enabled: true
+        directory: test_logs/data_csv
