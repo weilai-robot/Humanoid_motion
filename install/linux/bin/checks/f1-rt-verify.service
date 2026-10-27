@@ -1,0 +1,46 @@
+# f1-rt-verify.service — 验收员开机自检单元（产出 /run/ 凭证）
+# =============================================================================
+# 作用：每次开机自动运行一遍 verify-rt-config.sh --report（全量环境核验：
+#       内核参数/调速器/中断亲和/ethtool/系统服务等），结果三出口：
+#       ① /run/f1-rt-verify/report.txt 全文 + status 机器读凭证（★本单元新增——
+#          供启动门禁 rt_gate_check.sh 读取；/run 是 tmpfs 每次开机清空，
+#          存在的必是本次开机写的）；② 系统日志；③ 终端同步打印（journal+
+#          console——接显示器时 FAIL 当场可见）。
+#       判定规则：FAIL=0 即 PASS（WARN 不拦）。verify 有 FAIL 时本单元标记
+#       failed，但 oneshot 失败不影响开机流程（不阻塞 multi-user.target）——
+#       真正拦住启动的是 run_main.sh 门禁读不到 PASS 的 status。
+#
+# 安装（每台机器 root 一次，详见 install/linux/bin/README.md）：
+#   sudo mkdir -p /opt/f1/scripts
+#   sudo cp <verify-rt-config.sh 路径>/verify-rt-config.sh /opt/f1/scripts/  # 脚本由部署/运维侧提供
+#   sudo cp <部署目录>/checks/f1-rt-verify.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable f1-rt-verify.service
+#
+# 查看报告：
+#   开机时终端同步打印（journal+console，接显示器当场可见）
+#   journalctl -u f1-rt-verify.service -b       # 本次开机自检结果
+#   cat /run/f1-rt-verify/status                 # 门禁读的凭证（RESULT 行）
+#   sudo systemctl start f1-rt-verify.service    # 手动补跑一次（凭证随之刷新）
+#
+# 说明：swap 决策为"保留"的机器，ExecStart 末尾加 --expect-swap-on
+#       （该项 FAIL 记 EXPECTED，status 写 PASS_WITH_EXPECTED 仍放行）。
+# =============================================================================
+
+[Unit]
+Description=F1 RT environment boot self-check (verify-rt-config.sh --report)
+# 在 RT 环境配置服务之后跑（该单元不存在时此依赖自动忽略）
+# —— 必须先重放调优（governor/绑核/ethtool）再验收，否则误报
+After=f1-rt-setup.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/usr/bin/mkdir -p /run/f1-rt-verify
+ExecStart=/opt/f1/scripts/verify-rt-config.sh --report /run/f1-rt-verify
+RemainAfterExit=yes
+# 报告三出口：/run/ 凭证 + 系统日志 + 开机时打到终端（FAIL 当场可见）
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
