@@ -31,7 +31,7 @@ aimrt:
       - topic_name: "(.*)"
         enable_backends: [local, ros2]
     sub_topics_options: # 为 subscribe topic 选择后端
-      - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|cmd_vel_limiter)"
+      - topic_name: "/(idle_mode|zero_mode|stand_mode|walk_mode|walk_mode2|keep_mode|plan_mode|mimic_mode|cmd_vel_limiter)"
         enable_backends: [local, ros2]  # 允许外部 ROS2 节点发布模式指令和速度指令（含 Nav2）
       - topic_name: "(.*)"
         enable_backends: [local]
@@ -58,7 +58,7 @@ aimrt:
         cfg_file_path: ./cfg/joy_stick_module/joy_x1.yaml
       - name: ControlModule
         log_lvl: INFO
-        cfg_file_path: ./cfg/control_module/rl_x1.yaml
+        cfg_file_path: ./cfg/control_module/rl_x1_wbt.yaml
       - name: DcuDriverModule
         log_lvl: WARN
         cfg_file_path: ./cfg/dcu_driver_module/dcu_x1.yaml

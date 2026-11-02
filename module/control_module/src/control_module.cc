@@ -8,6 +8,7 @@
 
 #include "aimrt_module_ros2_interface/channel/ros2_channel.h"
 #include "control_module/global.h"
+#include "control_module/wbt_controller.h"
 #include "internal/common_utils.h"
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
@@ -101,6 +102,8 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
 
         if (controller_name.substr(0, 3) == "rl_") {
           controller_map_[controller_name] = std::make_shared<RLController>(use_sim_handles_);
+        } else if (controller_name.substr(0, 4) == "wbt_") {
+          controller_map_[controller_name] = std::make_shared<WBTController>(use_sim_handles_);
         } else if (controller_name.substr(0, 3) == "pd_") {
           controller_map_[controller_name] = std::make_shared<PDController>(use_sim_handles_);
         } else {
