@@ -26,12 +26,12 @@ robot_states:
   # 零模式
   zero:
     trigger_topic: /zero_mode
-    pre_states: [idle, keep, stand, stand_&_plan]
+    pre_states: [idle, keep, stand, stand_&_plan, b1_stand]
     controllers: [pd_zero]
   # 站立模式
   stand:
     trigger_topic: /stand_mode
-    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm, mimic]
+    pre_states: [zero, stand_&_plan, keep_&_plan, walk_leg_&_plan, walk_leg, walk_leg_arm, mimic, b1_stand]
     controllers: [pd_zero, pd_stand]
 
   # 行走模式1
