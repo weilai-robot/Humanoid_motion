@@ -23,6 +23,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp> 
 #include <geometry_msgs/msg/pose_stamped.hpp>
+#include <geometry_msgs/msg/twist.hpp>
 
 
 extern "C" {
@@ -65,6 +66,7 @@ class SimModule : public aimrt::ModuleBase {
   aimrt::channel::PublisherRef joint_state_pub_;
   aimrt::channel::PublisherRef lidar_imu_pub_;
   aimrt::channel::PublisherRef base_pose_pub_;
+  aimrt::channel::PublisherRef base_vel_pub_;
   aimrt::channel::PublisherRef ground_truth_pub_;
   std::vector<std::string> joint_names_;
   std::unordered_map<std::string, int> joint_state_index_map_;
@@ -88,6 +90,8 @@ class SimModule : public aimrt::ModuleBase {
   std::shared_ptr<mj::Simulate> sim_;
   std::atomic<bool> sim_ready_{false};
   std::string filename_;
+  int reset_keyframe_ = 0;  // 启动时使用的 keyframe 索引
+  std::vector<double> initial_qvel_;  // 启动时写入的广义速度（含基座 COM->origin 换算）
   mjvCamera cam_;
   mjvOption opt_;
   mjvPerturb pert_;
@@ -96,6 +100,8 @@ class SimModule : public aimrt::ModuleBase {
   int lidar_imu_quat_adr_ = -1;
   int lidar_imu_gyro_adr_ = -1;
   int lidar_imu_accel_adr_ = -1;
+  // base 线速度 (IMU site 系) 传感器地址
+  int body_lin_vel_adr_ = -1;
 
   // ground truth / metrics tracking
   int robot_root_body_id_ = -1;

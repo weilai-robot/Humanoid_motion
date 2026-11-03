@@ -1,7 +1,11 @@
 model_file: cfg/sim_module/model/mjcf/xyber_x1_flat_v2.xml
 render_frequecy: 50      # 数据发布频率
+reset_keyframe: 2        # 启动姿态：2 = wbt_b3_frame0（0 = home_default）
+initial_qvel: [-0.64475, -0.52694, -0.04259, -0.65688, -0.04802, 0.58655, -0.82372, -1.12240, -0.26952, 1.62736, 0.53678, -0.51102, -1.56590, -0.22622, -0.36836, -0.16013, 0.25796, -0.30663, 0.05659, -0.38909, -0.52836, 0.23432, 0.08900, -2.30550, -0.67474, -0.12509, 0.36005, 0.84207, -0.78657, -0.18119, -1.03869, -0.37729, 2.73845, -0.88116, -0.28283]  # B3 frame 0 广义速度
 
 sub_reset_sim_topic: /reset_sim
 sub_joint_cmd_topic: /joint_cmd
 pub_imu_data_topic: /imu/data
 pub_joint_state_topic: /joint_states
+pub_base_pose_topic: /mujoco/base_pose
+pub_base_vel_topic: /mujoco/base_vel

@@ -1,0 +1,76 @@
+{
+  "version": "1.2",
+  "source_data": "E:\\Retargeting\\F1_plan\\retarget\\slow_walk_amp_v1.1",
+  "source_ik_config": "E:\\Retargeting\\GMR\\general_motion_retargeting\\ik_configs\\smplx_to_F1_v1.1.json",
+  "ik_config_copy": "E:\\Retargeting\\GMR\\general_motion_retargeting\\ik_configs\\smplx_to_F1_v1.2.json",
+  "ik_config_unchanged": true,
+  "filter": {
+    "type": "Butterworth low-pass, zero-phase (sosfiltfilt)",
+    "order": 2,
+    "cutoff_hz": 3.5,
+    "applied_to": [
+      "root_pos",
+      "root_rot (sign-aligned, renormalized)",
+      "dof_pos"
+    ],
+    "note": "Offline smoothing only; no MJCF or IK mapping changes."
+  },
+  "clips": {
+    "F1_B1_stand_to_walk": {
+      "fps": 50.0,
+      "frames": 311,
+      "v1_1_metrics": {
+        "max_abs_joint_velocity_rad_s": 9.058281166082761,
+        "max_abs_joint_acceleration_rad_s2": 417.2479842067588,
+        "joint_steps_over_0_1_rad": 41
+      },
+      "v1_2_metrics": {
+        "max_abs_joint_velocity_rad_s": 5.49309080592664,
+        "max_abs_joint_acceleration_rad_s2": 51.93304483006561,
+        "joint_steps_over_0_1_rad": 6
+      }
+    },
+    "F1_B2_walk_to_stand": {
+      "fps": 50.0,
+      "frames": 284,
+      "v1_1_metrics": {
+        "max_abs_joint_velocity_rad_s": 9.7941490724295,
+        "max_abs_joint_acceleration_rad_s2": 453.5559551064719,
+        "joint_steps_over_0_1_rad": 50
+      },
+      "v1_2_metrics": {
+        "max_abs_joint_velocity_rad_s": 5.687150408037595,
+        "max_abs_joint_acceleration_rad_s2": 56.4741028305718,
+        "joint_steps_over_0_1_rad": 13
+      }
+    },
+    "F1_B3_continuous_walk": {
+      "fps": 50.0,
+      "frames": 381,
+      "v1_1_metrics": {
+        "max_abs_joint_velocity_rad_s": 10.804173838150321,
+        "max_abs_joint_acceleration_rad_s2": 510.1854187744223,
+        "joint_steps_over_0_1_rad": 97
+      },
+      "v1_2_metrics": {
+        "max_abs_joint_velocity_rad_s": 5.986487204645691,
+        "max_abs_joint_acceleration_rad_s2": 62.76936684114387,
+        "joint_steps_over_0_1_rad": 35
+      }
+    },
+    "F1_B4_walk_backwards": {
+      "fps": 50.0,
+      "frames": 377,
+      "v1_1_metrics": {
+        "max_abs_joint_velocity_rad_s": 9.364587978312573,
+        "max_abs_joint_acceleration_rad_s2": 386.46093294716206,
+        "joint_steps_over_0_1_rad": 17
+      },
+      "v1_2_metrics": {
+        "max_abs_joint_velocity_rad_s": 4.800852887902882,
+        "max_abs_joint_acceleration_rad_s2": 43.78463960253832,
+        "joint_steps_over_0_1_rad": 0
+      }
+    }
+  }
+}

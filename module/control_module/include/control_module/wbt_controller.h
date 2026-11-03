@@ -2,9 +2,11 @@
 
 #include <onnxruntime/onnxruntime_cxx_api.h>
 
-#include <Eigen/Dense>
+#include <eigen3/Eigen/Dense>
 #include <cstdint>
+#include <fstream>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
@@ -25,9 +27,12 @@ class WBTController : public ControllerBase {
 
   void Init(const YAML::Node& cfg_node) override;
   void RestartController() override;
+  void SetBaseVelData(const geometry_msgs::msg::Twist base_vel_data) override;
+  void SetBasePoseData(const geometry_msgs::msg::PoseStamped base_pose_data) override;
 
   void Update() override;
   my_ros2_proto::msg::JointCommand GetJointCmdData() override;
+  bool Finished() const override { return finished_; }
 
  private:
   void LoadModel();
@@ -101,9 +106,39 @@ class WBTController : public ControllerBase {
   vector3_t ref_pos0_;
   vector3_t robot_pos_motion_;
   quaternion_t imu_quat_offset_;
+  vector3_t base_pos0_;  // 进入 mimic 时的 base 世界位置（指标对齐基准）
 
   int64_t time_step_{0};
   int64_t loop_count_{0};
+
+  // 仿真真值 base 线速度（IMU site 系），无该话题时保持为零
+  mutable std::mutex base_vel_mutex_;
+  vector3_t base_lin_vel_sim_;
+  bool has_base_lin_vel_{false};
+
+  // 仿真真值 base 位姿（用于跟踪指标记录），真机无该话题
+  mutable std::mutex base_pose_mutex_;
+  vector3_t base_pos_sim_;
+  quaternion_t base_quat_sim_;
+  bool has_base_pose_{false};
+  bool wait_for_base_pose_{false};  // 收到 base 位姿后才开始推进策略
+
+  // 跟踪指标 CSV
+  std::ofstream metrics_file_;
+  int metrics_row_{0};
+
+  // 系统辨识用：保持进入 mimic 时的关节角（不跑策略）
+  bool hold_pose_{false};
+  vector_t hold_q_;
+  // 系统辨识用：直接跟踪参考关节角（开环回放，不用策略输出）
+  bool replay_reference_{false};
+
+  // ONNX 参考流（joint_pos/joint_vel）的关节排列：Isaac 槽位 -> ONNX 数组下标
+  std::vector<int> onnx_ref_order_;
+
+  // 参考动作播完（time_step >= reference_frames）后置位，供 ControlModule 自动切回 stand
+  bool finish_at_end_{false};
+  bool finished_{false};
 
   std::vector<digital_lp_filter<double>> low_pass_filters_;
 };

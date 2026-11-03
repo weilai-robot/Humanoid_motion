@@ -33,6 +33,10 @@ float_pubs:
     buttons: [6]
   - topic_name: /plan_mode
     buttons: [5]
+  - topic_name: /b1_stand_mode
+    buttons: [9]    # 左手摇杆按下（L3）
+  - topic_name: /mimic_mode
+    buttons: [10]   # 右手摇杆按下（R3）
 
 # Twist twist
 #         Vector3  linear

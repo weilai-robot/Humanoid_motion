@@ -21,6 +21,10 @@ bool SimModule::Initialize(aimrt::CoreRef core) {
   try {
     YAML::Node cfg_node = YAML::LoadFile(file_path.data());
     filename_ = cfg_node["model_file"].as<std::string>();
+    reset_keyframe_ = cfg_node["reset_keyframe"] ? cfg_node["reset_keyframe"].as<int>() : 0;
+    if (cfg_node["initial_qvel"]) {
+      initial_qvel_ = cfg_node["initial_qvel"].as<std::vector<double>>();
+    }
 
     joint_cmd_sub_ = core_.GetChannelHandle().GetSubscriber(cfg_node["sub_joint_cmd_topic"].as<std::string>());
     aimrt::channel::Subscribe<my_ros2_proto::msg::JointCommand>(joint_cmd_sub_, std::bind(&SimModule::CmdCallback, this, std::placeholders::_1));
@@ -38,6 +42,11 @@ bool SimModule::Initialize(aimrt::CoreRef core) {
     if (cfg_node["pub_base_pose_topic"]) {
       base_pose_pub_ = core_.GetChannelHandle().GetPublisher(cfg_node["pub_base_pose_topic"].as<std::string>());
       aimrt::channel::RegisterPublishType<geometry_msgs::msg::PoseStamped>(base_pose_pub_);
+    }
+    // base 线速度 publisher (可选，供 WBT 观测使用仿真真值)
+    if (cfg_node["pub_base_vel_topic"]) {
+      base_vel_pub_ = core_.GetChannelHandle().GetPublisher(cfg_node["pub_base_vel_topic"].as<std::string>());
+      aimrt::channel::RegisterPublishType<geometry_msgs::msg::Twist>(base_vel_pub_);
     }
     // ground truth publisher (optional, for nav testing metrics)
     if (cfg_node["pub_ground_truth_topic"]) {
@@ -64,6 +73,9 @@ bool SimModule::Start() {
   // Render thread
   render_executor_.Execute([this]() {
     sim_ = std::make_shared<mj::Simulate>(std::make_unique<mj::GlfwAdapter>(), &cam_, &opt_, &pert_, false);
+    // 物理步进仅由 CmdCallback 驱动（1 kHz），关闭渲染线程的自动 run，
+    // 否则无 UI 时会以渲染帧率反复 mj_step，导致仿真远快于控制器（实测 RTF≈18）
+    sim_->run = 0;
     sim_->LoadMessage(filename_.data());
     const int kErrorLength = 1024;
     char loadError[kErrorLength] = "";
@@ -73,7 +85,17 @@ bool SimModule::Start() {
       const std::unique_lock<std::recursive_mutex> lock(sim_->mtx);
       d_ = mj_makeData(m_);
       if (m_->nkey > 0) {
-        mj_resetDataKeyframe(m_, d_, 0);
+        const int kid = std::min(std::max(reset_keyframe_, 0), m_->nkey - 1);
+        mj_resetDataKeyframe(m_, d_, kid);
+        AIMRT_INFO("Reset to keyframe index {} / {}", kid, m_->nkey - 1);
+      }
+      if (!initial_qvel_.empty()) {
+        if (static_cast<int>(initial_qvel_.size()) == m_->nv) {
+          for (int i = 0; i < m_->nv; ++i) d_->qvel[i] = initial_qvel_[i];
+          AIMRT_INFO("Initial qvel applied ({} dof)", m_->nv);
+        } else {
+          AIMRT_WARN("initial_qvel size {} != nv {}, ignored", initial_qvel_.size(), m_->nv);
+        }
       }
     }
     is_render_thread_running_ = true;
@@ -133,6 +155,8 @@ bool SimModule::Start() {
     lidar_imu_gyro_adr_ = (sid >= 0) ? m_->sensor_adr[sid] : -1;
     sid = mj_name2id(m_, mjOBJ_SENSOR, "lidar-linear-acceleration");
     lidar_imu_accel_adr_ = (sid >= 0) ? m_->sensor_adr[sid] : -1;
+    sid = mj_name2id(m_, mjOBJ_SENSOR, "body-linear-vel");
+    body_lin_vel_adr_ = (sid >= 0) ? m_->sensor_adr[sid] : -1;
   }
 
   // Cache body/geom IDs for ground truth metrics
@@ -173,6 +197,15 @@ void SimModule::CmdCallback(const std::shared_ptr<const my_ros2_proto::msg::Join
 
   aimrt::channel::Publish<sensor_msgs::msg::Imu>(imu_data_pub_, imu_data_msg);
   aimrt::channel::Publish<sensor_msgs::msg::JointState>(joint_state_pub_, joint_states_msg);
+
+  // Publish base 线速度 (IMU site 系, 供 WBT 观测)
+  if (base_vel_pub_ && body_lin_vel_adr_ >= 0) {
+    geometry_msgs::msg::Twist vel_msg;
+    vel_msg.linear.x = d_->sensordata[body_lin_vel_adr_];
+    vel_msg.linear.y = d_->sensordata[body_lin_vel_adr_ + 1];
+    vel_msg.linear.z = d_->sensordata[body_lin_vel_adr_ + 2];
+    aimrt::channel::Publish<geometry_msgs::msg::Twist>(base_vel_pub_, vel_msg);
+  }
 
   // Publish lidar IMU (for FastLIO2 in navigation sim)
   if (lidar_imu_pub_ && lidar_imu_quat_adr_ >= 0) {

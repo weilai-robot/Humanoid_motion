@@ -203,6 +203,34 @@ bool ControlModule::Initialize(aimrt::CoreRef core) {
           });
       AIMRT_INFO("Subscribed actuator topics: {} , {}", actuator_cmd_topic, actuator_state_topic);
 
+      // 可选的 base 线速度（仅仿真提供真值，供 WBT 观测使用）
+      if (cfg_node["sub_base_vel_name"]) {
+        const std::string base_vel_topic = cfg_node["sub_base_vel_name"].as<std::string>();
+        subs_.push_back(core_.GetChannelHandle().GetSubscriber(base_vel_topic));
+        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::Twist>(
+            subs_.back(),
+            [this](const std::shared_ptr<const geometry_msgs::msg::Twist>& msg) {
+              for (const auto& controller : controller_map_) {
+                controller.second->SetBaseVelData(*msg);
+              }
+            });
+        AIMRT_INFO("Subscribed base velocity topic: {}", base_vel_topic);
+      }
+
+      // 可选的 base 位姿（仅仿真提供真值，供 WBT 指标记录）
+      if (cfg_node["sub_base_pose_name"]) {
+        const std::string base_pose_topic = cfg_node["sub_base_pose_name"].as<std::string>();
+        subs_.push_back(core_.GetChannelHandle().GetSubscriber(base_pose_topic));
+        ret &= aimrt::channel::Subscribe<geometry_msgs::msg::PoseStamped>(
+            subs_.back(),
+            [this](const std::shared_ptr<const geometry_msgs::msg::PoseStamped>& msg) {
+              for (const auto& controller : controller_map_) {
+                controller.second->SetBasePoseData(*msg);
+              }
+            });
+        AIMRT_INFO("Subscribed base pose topic: {}", base_pose_topic);
+      }
+
       AIMRT_CHECK_ERROR_THROW(ret, "Subscribe failed.");
 
       // 控制器发布
@@ -320,6 +348,26 @@ bool ControlModule::MainLoop() {
         }
       }
       aimrt::channel::Publish<my_ros2_proto::msg::JointCommand>(joint_cmd_pub_, cmd_msg);
+
+      // WBT 播完整段参考后自动切回 stand（仅 finish_at_end=true 时）
+      {
+        bool wbt_finished = false;
+        for (const auto& name : controller_names) {
+          auto wbt = std::dynamic_pointer_cast<WBTController>(controller_map_[name]);
+          if (wbt && wbt->Finished()) {
+            wbt_finished = true;
+            break;
+          }
+        }
+        if (wbt_finished && state_machine_.OnEvent("/stand_mode")) {
+          const auto new_names = state_machine_.GetCurrentControllerNames();
+          for (const auto& name : new_names) {
+            controller_map_[name]->RestartController();
+          }
+          AIMRT_INFO("WBT finished: auto switch to '{}'", state_machine_.GetCurrentState());
+          UpdateRlLoggingState(state_machine_.GetCurrentState());
+        }
+      }
 
       // ── R5: 本周期体耗时 + 直方图更新（O(1)，无锁无 IO）──
       const int64_t body_us =

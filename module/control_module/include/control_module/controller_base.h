@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -24,6 +25,8 @@ class ControllerBase {
   virtual void Init(const YAML::Node &cfg_node) = 0;
   virtual void RestartController() = 0;
   virtual void SetCmdData(const geometry_msgs::msg::Twist joy_data);
+  virtual void SetBaseVelData(const geometry_msgs::msg::Twist base_vel_data);
+  virtual void SetBasePoseData(const geometry_msgs::msg::PoseStamped base_pose_data);
   virtual void SetImuData(const sensor_msgs::msg::Imu imu_data);
   virtual void SetJointStateData(const sensor_msgs::msg::JointState joint_state_data, const std::unordered_map<std::string, int> &joint_state_index_map_);
   virtual void SetActuatorCmdData(const my_ros2_proto::msg::JointCommand actuator_cmd_data);
@@ -31,6 +34,8 @@ class ControllerBase {
   virtual std::vector<std::string> GetJointList();
   virtual void Update() = 0;
   virtual my_ros2_proto::msg::JointCommand GetJointCmdData() = 0;
+  // 是否已完成本段参考动作（仅 WBT 使用）
+  virtual bool Finished() const { return false; }
 
  protected:
   bool use_sim_handles_;

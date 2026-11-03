@@ -9,6 +9,14 @@ void ControllerBase::SetCmdData(const geometry_msgs::msg::Twist joy_data) {
   joy_data_ = joy_data;
 }
 
+void ControllerBase::SetBaseVelData(const geometry_msgs::msg::Twist base_vel_data) {
+  (void)base_vel_data;
+}
+
+void ControllerBase::SetBasePoseData(const geometry_msgs::msg::PoseStamped base_pose_data) {
+  (void)base_pose_data;
+}
+
 void ControllerBase::SetImuData(const sensor_msgs::msg::Imu imu_data) {
   std::lock_guard<std::shared_mutex> lock(imu_mutex_);
   imu_data_ = imu_data;
